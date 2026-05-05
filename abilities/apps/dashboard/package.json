@@ -1,0 +1,16 @@
+{
+  "name": "@hermes/dashboard-ability",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --experimental-strip-types src/index.ts serve",
+    "test": "node --test --experimental-strip-types tests/dashboard.test.ts",
+    "build": "pnpm exec tsc -p tsconfig.json",
+    "invoke": "node --experimental-strip-types src/index.ts invoke"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  }
+}

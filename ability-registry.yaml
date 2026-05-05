@@ -1,0 +1,7 @@
+abilities:
+  - id: notion
+    manifest: abilities/connectors/notion/ability.yaml
+    enabled: true
+  - id: dashboard
+    manifest: abilities/apps/dashboard/ability.yaml
+    enabled: true

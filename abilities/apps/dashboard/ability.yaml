@@ -1,0 +1,17 @@
+id: dashboard
+type: app
+runtime: typescript
+description: Minimal Hermes dashboard app stub.
+entrypoint: pnpm --dir abilities/apps/dashboard invoke
+env:
+  - DASHBOARD_PORT
+tags:
+  - dashboard
+  - app
+  - hermes
+commands:
+  install: pnpm --dir abilities/apps/dashboard install
+  dev: pnpm --dir abilities/apps/dashboard dev
+  test: pnpm --dir abilities/apps/dashboard test
+  build: pnpm --dir abilities/apps/dashboard build
+  invoke: pnpm --dir abilities/apps/dashboard invoke
