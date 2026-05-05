@@ -1,8 +1,8 @@
 # Hermes Tools
 
 Hermes Tools is an internal-first monorepo of agent-facing abilities. Each
-ability is a discoverable unit that Hermes can invoke through a manifest-backed
-CLI contract.
+ability is self-contained, directly executable, and documented in its own
+folder.
 
 ## Repository Shape
 
@@ -11,9 +11,10 @@ CLI contract.
 ├── CONTEXT.md
 ├── README.md
 ├── .env.example
-├── ability-registry.yaml
-├── abilityctl.py
 ├── justfile
+├── bin/
+│   ├── dashboard
+│   └── notion
 └── abilities/
     ├── apps/
     │   └── dashboard/
@@ -26,45 +27,52 @@ CLI contract.
 
 - `ability` is the canonical unit in this repo.
 - Abilities are grouped by `type`, not by runtime.
-- Python and TypeScript are both first-class runtimes.
-- Every ability is discoverable through `ability-registry.yaml`.
-- Every ability declares its contract in a local `ability.yaml`.
+- Discovery is filesystem-first: each ability directory carries a lightweight `ability.yaml`.
+- Python abilities should expose their CLI through `Typer`.
+- Usage guidance lives in per-ability `README.md` files instead of a strict repo-wide contract.
 
-## Standard Lifecycle
+## Direct Commands
 
-Each ability exposes the same high-level commands:
-
-- `install`
-- `dev`
-- `test`
-- `build` when relevant
-- `invoke`
-
-Use the shared control script directly:
+Use the checked-in shims directly:
 
 ```bash
-uv run --with pyyaml python abilityctl.py list
-uv run --with pyyaml python abilityctl.py validate
-uv run --with pyyaml python abilityctl.py run notion install
-uv run --with pyyaml python abilityctl.py run dashboard invoke
+./bin/notion --help
+./bin/notion status
+./bin/dashboard help
+./bin/dashboard serve
 ```
 
-Or through `just` if it is installed locally:
+If you add `bin/` to your `PATH`, the same commands can be run as:
 
 ```bash
-just list
-just validate
-just install notion
-just invoke dashboard
+notion --help
+notion list-pages --database-id your-database-id --json
+dashboard status
 ```
+
+## Metadata
+
+Each ability keeps a minimal `ability.yaml` for discovery and execution hints.
+The file is intentionally lightweight and may contain only:
+
+- `id`
+- `type`
+- `runtime`
+- `description`
+- `command`
+
+The manifest is not a lifecycle contract. It does not define required commands,
+entrypoint equality rules, or environment validation.
+
+## Soft Conventions
+
+Abilities may expose commands such as `install`, `dev`, `test`, or `build` when
+those workflows make sense, but the repository does not require a shared command
+set.
 
 ## Configuration
 
-Local development uses a single root `.env` file for convenience. Each ability
-must explicitly declare the environment variables it consumes in its
-`ability.yaml`.
-
-Start from:
+Local development uses a single root `.env` file for convenience.
 
 ```bash
 cp .env.example .env
@@ -72,13 +80,11 @@ cp .env.example .env
 
 ## Sample Abilities
 
-- `notion`: a Python connector with JSON-over-stdin `invoke` actions for Notion
-  database pages, including listing pages from a database and updating a
-  specific page property by `property_id`.
-- `dashboard`: a TypeScript app stub that exposes a minimal HTTP dashboard and
-  CLI invocation surface.
+- `notion`: a Python connector with a Typer CLI for inspecting status, listing
+  database pages, and updating a page property.
+- `dashboard`: a TypeScript app with direct `status` and `serve` commands.
 
 ## Notion Terminology
 
-In this repository, a row/record in a Notion database is called a
+In this repository, a row or record in a Notion database is called a
 **database page**. Older references to "item" map to the same concept.

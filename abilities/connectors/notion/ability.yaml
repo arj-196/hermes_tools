@@ -1,18 +1,5 @@
 id: notion
 type: connector
 runtime: python
-description: Notion connector stub for Hermes.
-entrypoint: uv run --project abilities/connectors/notion python abilities/connectors/notion/src/main.py invoke
-env:
-  - NOTION_API_TOKEN
-  - NOTION_PARENT_PAGE_ID
-tags:
-  - notion
-  - connector
-  - hermes
-commands:
-  install: uv sync --project abilities/connectors/notion
-  dev: uv run --project abilities/connectors/notion python abilities/connectors/notion/src/main.py dev
-  test: uv run --project abilities/connectors/notion python -m unittest discover -s abilities/connectors/notion/tests
-  build: uv run --project abilities/connectors/notion python -m compileall abilities/connectors/notion/src
-  invoke: uv run --project abilities/connectors/notion python abilities/connectors/notion/src/main.py invoke
+description: Direct Notion CLI for Hermes.
+command: ./bin/notion

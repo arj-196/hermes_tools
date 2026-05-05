@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-import sys
+from pathlib import Path
 from typing import Any
 from urllib import error, request
 
+import typer
+
 NOTION_VERSION = "2022-06-28"
 NOTION_BASE_URL = "https://api.notion.com/v1"
+
+app = typer.Typer(help="Direct CLI for the Hermes Notion connector.", no_args_is_help=True)
 
 
 class NotionAPIError(Exception):
@@ -18,6 +22,12 @@ class NotionAPIError(Exception):
         self.message = message
 
 
+class InvalidRequestError(ValueError):
+    def __init__(self, action: str, message: str) -> None:
+        super().__init__(message)
+        self.action = action
+
+
 def mask_secret(value: str | None) -> str:
     if not value:
         return "missing"
@@ -26,13 +36,12 @@ def mask_secret(value: str | None) -> str:
     return f"{value[:3]}...{value[-3:]}"
 
 
-def build_status_payload(mode: str) -> dict[str, object]:
+def build_status_payload() -> dict[str, object]:
     token = os.getenv("NOTION_API_TOKEN")
     parent_page = os.getenv("NOTION_PARENT_PAGE_ID")
     return {
         "ability": "notion",
-        "mode": mode,
-        "connected": bool(token and parent_page),
+        "connected": bool(token),
         "workspace": {
             "parent_page_id": parent_page or "missing",
             "token_preview": mask_secret(token),
@@ -50,38 +59,6 @@ def build_error(action: str, code: str, message: str, status: int = 400) -> dict
             "status": status,
         },
     }
-
-
-def parse_invoke_input(raw_input: str) -> dict[str, Any] | None:
-    if not raw_input.strip():
-        return None
-
-    try:
-        payload = json.loads(raw_input)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON input: {exc.msg}") from exc
-
-    if not isinstance(payload, dict):
-        raise ValueError("Invoke input must be a JSON object")
-    return payload
-
-
-def infer_action_from_raw(raw_input: str) -> str:
-    try:
-        parsed = parse_invoke_input(raw_input)
-    except ValueError:
-        return "unknown"
-    if not parsed:
-        return "invoke"
-    action = parsed.get("action")
-    return action if isinstance(action, str) else "unknown"
-
-
-def require_str(payload: dict[str, Any], key: str, action: str) -> str:
-    value = payload.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{action}: '{key}' is required and must be a non-empty string")
-    return value
 
 
 def notion_request(
@@ -151,35 +128,63 @@ def extract_page_summary(page: dict[str, Any], property_ids: list[str] | None = 
     }
 
 
-def handle_list_pages(payload: dict[str, Any], token: str) -> dict[str, Any]:
+def page_belongs_to_database(page: dict[str, Any], database_id: str) -> bool:
+    parent = page.get("parent", {})
+    if not isinstance(parent, dict):
+        return False
+    return parent.get("type") == "database_id" and parent.get("database_id") == database_id
+
+
+def require_token(action: str) -> str:
+    token = os.getenv("NOTION_API_TOKEN", "").strip()
+    if not token:
+        raise NotionAPIError(
+            status=400,
+            code="missing_token",
+            message=f"NOTION_API_TOKEN is required for {action}.",
+        )
+    return token
+
+
+def load_json_file(path: Path, action: str) -> dict[str, Any]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise InvalidRequestError(action, f"JSON file not found: {path}") from exc
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise InvalidRequestError(action, f"Invalid JSON in {path}: {exc.msg}") from exc
+
+    if not isinstance(payload, dict) or not payload:
+        raise InvalidRequestError(action, f"{path} must contain a non-empty JSON object")
+    return payload
+
+
+def list_pages(
+    token: str,
+    database_id: str,
+    mode: str = "summary",
+    page_size: int | None = None,
+    start_cursor: str | None = None,
+    property_ids: list[str] | None = None,
+) -> dict[str, Any]:
     action = "list_pages"
-    database_id = require_str(payload, "database_id", action)
-    mode = payload.get("mode", "summary")
     if mode not in {"summary", "full"}:
-        raise ValueError(f"{action}: 'mode' must be 'summary' or 'full'")
+        raise InvalidRequestError(action, "'mode' must be 'summary' or 'full'")
+    if page_size is not None and page_size <= 0:
+        raise InvalidRequestError(action, "'page_size' must be a positive integer")
+    if start_cursor is not None and not start_cursor.strip():
+        raise InvalidRequestError(action, "'start_cursor' must be a non-empty string")
+    if property_ids is not None and any(not item.strip() for item in property_ids):
+        raise InvalidRequestError(action, "'property_ids' must not contain empty values")
 
     request_payload: dict[str, Any] = {}
-
-    page_size = payload.get("page_size")
     if page_size is not None:
-        if not isinstance(page_size, int) or page_size <= 0:
-            raise ValueError(f"{action}: 'page_size' must be a positive integer")
         request_payload["page_size"] = page_size
-
-    start_cursor = payload.get("start_cursor")
     if start_cursor is not None:
-        if not isinstance(start_cursor, str) or not start_cursor.strip():
-            raise ValueError(f"{action}: 'start_cursor' must be a non-empty string")
         request_payload["start_cursor"] = start_cursor
-
-    property_ids = payload.get("property_ids")
-    parsed_property_ids: list[str] | None = None
-    if property_ids is not None:
-        if not isinstance(property_ids, list) or not all(
-            isinstance(item, str) and item.strip() for item in property_ids
-        ):
-            raise ValueError(f"{action}: 'property_ids' must be a list of non-empty strings")
-        parsed_property_ids = property_ids
 
     api_response = notion_request("POST", f"/databases/{database_id}/query", token, request_payload)
     results = api_response.get("results", [])
@@ -190,7 +195,7 @@ def handle_list_pages(payload: dict[str, Any], token: str) -> dict[str, Any]:
     if mode == "full":
         output_results = results
     else:
-        output_results = [extract_page_summary(page, parsed_property_ids) for page in results]
+        output_results = [extract_page_summary(page, property_ids) for page in results]
 
     return {
         "ok": True,
@@ -203,22 +208,16 @@ def handle_list_pages(payload: dict[str, Any], token: str) -> dict[str, Any]:
     }
 
 
-def page_belongs_to_database(page: dict[str, Any], database_id: str) -> bool:
-    parent = page.get("parent", {})
-    if not isinstance(parent, dict):
-        return False
-    return parent.get("type") == "database_id" and parent.get("database_id") == database_id
-
-
-def handle_update_page_property(payload: dict[str, Any], token: str) -> dict[str, Any]:
+def update_page_property(
+    token: str,
+    database_id: str,
+    page_id: str,
+    property_id: str,
+    value: dict[str, Any],
+) -> dict[str, Any]:
     action = "update_page_property"
-    database_id = require_str(payload, "database_id", action)
-    page_id = require_str(payload, "page_id", action)
-    property_id = require_str(payload, "property_id", action)
-    value = payload.get("value")
-
-    if not isinstance(value, dict) or not value:
-        raise ValueError(f"{action}: 'value' must be a non-empty object with Notion property payload")
+    if not value:
+        raise InvalidRequestError(action, "'value' must be a non-empty JSON object")
 
     page = notion_request("GET", f"/pages/{page_id}", token)
     if not page_belongs_to_database(page, database_id):
@@ -245,57 +244,116 @@ def handle_update_page_property(payload: dict[str, Any], token: str) -> dict[str
     }
 
 
-def handle_invoke(token: str, raw_input: str) -> dict[str, Any]:
-    parsed = parse_invoke_input(raw_input)
-    if parsed is None:
-        return build_status_payload("invoke")
-
-    action = parsed.get("action")
-    if not isinstance(action, str):
-        raise ValueError("'action' is required and must be a string")
-
-    if not token:
-        raise NotionAPIError(
-            status=400,
-            code="missing_token",
-            message="NOTION_API_TOKEN is required for invoke actions",
-        )
-
-    if action == "list_pages":
-        return handle_list_pages(parsed, token)
-    if action == "update_page_property":
-        return handle_update_page_property(parsed, token)
-
-    raise ValueError(f"Unsupported action: {action}")
+def emit_json(payload: dict[str, Any]) -> None:
+    typer.echo(json.dumps(payload, indent=2))
 
 
-def main(argv: list[str] | None = None) -> int:
-    print("Notion Connector - Starting up...", file=sys.stderr)
-    args = argv or sys.argv[1:]
-    mode = args[0] if args else "invoke"
-    if mode not in {"dev", "invoke"}:
-        print(f"Unsupported mode: {mode}", file=sys.stderr)
-        return 1
+def emit_human_status(payload: dict[str, Any]) -> None:
+    workspace = payload["workspace"]
+    typer.echo("Notion connector status")
+    typer.echo(f"Connected: {'yes' if payload['connected'] else 'no'}")
+    typer.echo(f"Token: {workspace['token_preview']}")
+    typer.echo(f"Parent page: {workspace['parent_page_id']}")
 
-    if mode == "dev":
-        print(json.dumps(build_status_payload(mode), indent=2))
-        return 0
 
-    token = os.getenv("NOTION_API_TOKEN")
-    raw_input = sys.stdin.read()
-    action = infer_action_from_raw(raw_input)
+def emit_human_list(payload: dict[str, Any], mode: str) -> None:
+    results = payload["data"]["results"]
+    typer.echo(f"Found {len(results)} database page(s) in {mode} mode")
+    for page in results:
+        if mode == "full":
+            title = extract_page_summary(page).get("title") or "untitled"
+            page_id = page.get("id", "unknown")
+        else:
+            title = page.get("title") or "untitled"
+            page_id = page.get("id", "unknown")
+        typer.echo(f"- {title} [{page_id}]")
+    typer.echo(f"Has more: {'yes' if payload['data']['has_more'] else 'no'}")
+    next_cursor = payload["data"]["next_cursor"]
+    if next_cursor:
+        typer.echo(f"Next cursor: {next_cursor}")
 
+
+def emit_human_update(payload: dict[str, Any]) -> None:
+    data = payload["data"]
+    typer.echo(f"Updated property {data['updated_property']['property_id']} on page {data['page_id']}")
+    typer.echo(f"Last edited: {data['last_edited_time']}")
+
+
+def exit_with_error(action: str, exc: Exception, json_output: bool) -> None:
+    if isinstance(exc, NotionAPIError):
+        payload = build_error(action, exc.code, exc.message, exc.status)
+    elif isinstance(exc, InvalidRequestError):
+        payload = build_error(exc.action, "invalid_request", str(exc), 400)
+    else:
+        payload = build_error(action, "invalid_request", str(exc), 400)
+
+    if json_output:
+        emit_json(payload)
+    else:
+        typer.echo(f"{payload['error']['code']}: {payload['error']['message']}", err=True)
+    raise typer.Exit(code=1)
+
+
+@app.command("status")
+def status(json_output: bool = typer.Option(False, "--json", help="Emit structured JSON.")) -> None:
+    payload = build_status_payload()
+    if json_output:
+        emit_json(payload)
+        return
+    emit_human_status(payload)
+
+
+@app.command("list-pages")
+def list_pages_command(
+    database_id: str = typer.Option(..., "--database-id", help="Target Notion database ID."),
+    mode: str = typer.Option("summary", "--mode", help="summary or full."),
+    page_size: int | None = typer.Option(None, "--page-size", help="Limit the number of results."),
+    start_cursor: str | None = typer.Option(None, "--start-cursor", help="Pagination cursor."),
+    property_ids: list[str] | None = typer.Option(None, "--property-id", help="Property ID to include in summary output. Repeat for multiple values."),
+    json_output: bool = typer.Option(False, "--json", help="Emit structured JSON."),
+) -> None:
     try:
-        output = handle_invoke(token or "", raw_input)
-        print(json.dumps(output, indent=2))
-        return 0
-    except ValueError as exc:
-        print(json.dumps(build_error(action, "invalid_request", str(exc), 400), indent=2))
-        return 1
-    except NotionAPIError as exc:
-        print(json.dumps(build_error(action, exc.code, exc.message, exc.status), indent=2))
-        return 1
+        payload = list_pages(
+            token=require_token("list-pages"),
+            database_id=database_id,
+            mode=mode,
+            page_size=page_size,
+            start_cursor=start_cursor,
+            property_ids=property_ids,
+        )
+    except (InvalidRequestError, NotionAPIError) as exc:
+        exit_with_error("list_pages", exc, json_output)
+
+    if json_output:
+        emit_json(payload)
+        return
+    emit_human_list(payload, mode)
+
+
+@app.command("update-page-property")
+def update_page_property_command(
+    database_id: str = typer.Option(..., "--database-id", help="Target Notion database ID."),
+    page_id: str = typer.Option(..., "--page-id", help="Target page ID."),
+    property_id: str = typer.Option(..., "--property-id", help="Property ID to update."),
+    value_file: Path = typer.Option(..., "--value-file", exists=True, dir_okay=False, readable=True, help="Path to a JSON file containing the Notion property payload."),
+    json_output: bool = typer.Option(False, "--json", help="Emit structured JSON."),
+) -> None:
+    try:
+        payload = update_page_property(
+            token=require_token("update-page-property"),
+            database_id=database_id,
+            page_id=page_id,
+            property_id=property_id,
+            value=load_json_file(value_file, "update_page_property"),
+        )
+    except (InvalidRequestError, NotionAPIError) as exc:
+        exit_with_error("update_page_property", exc, json_output)
+
+    if json_output:
+        emit_json(payload)
+        return
+    emit_human_update(payload)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    app(prog_name="notion")

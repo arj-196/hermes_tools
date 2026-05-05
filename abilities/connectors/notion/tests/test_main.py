@@ -1,36 +1,30 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
+
+from typer.testing import CliRunner
 
 from abilities.connectors.notion.src import main
 
 
 class NotionAbilityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+
     def test_mask_secret_handles_missing_value(self) -> None:
         self.assertEqual(main.mask_secret(None), "missing")
 
     def test_status_payload_exposes_ability_name(self) -> None:
-        payload = main.build_status_payload("invoke")
+        payload = main.build_status_payload()
         self.assertEqual(payload["ability"], "notion")
 
-    def test_parse_rejects_invalid_json(self) -> None:
-        with self.assertRaises(ValueError):
-            main.parse_invoke_input("{")
-
-    def test_handle_invoke_rejects_missing_action(self) -> None:
-        with self.assertRaises(ValueError):
-            main.handle_invoke("token", json.dumps({"database_id": "db1"}))
-
-    def test_handle_list_pages_rejects_invalid_mode(self) -> None:
-        payload = {
-            "action": "list_pages",
-            "database_id": "db1",
-            "mode": "bad-mode",
-        }
-        with self.assertRaises(ValueError):
-            main.handle_list_pages(payload, "token")
+    def test_list_pages_rejects_invalid_mode(self) -> None:
+        with self.assertRaises(main.InvalidRequestError):
+            main.list_pages("token", "db1", mode="bad-mode")
 
     @patch("abilities.connectors.notion.src.main.notion_request")
     def test_list_pages_summary_mode(self, mock_notion_request) -> None:
@@ -57,17 +51,7 @@ class NotionAbilityTests(unittest.TestCase):
             "next_cursor": "cursor-1",
         }
 
-        response = main.handle_invoke(
-            "token",
-            json.dumps(
-                {
-                    "action": "list_pages",
-                    "database_id": "db1",
-                    "mode": "summary",
-                    "property_ids": ["status-id"],
-                }
-            ),
-        )
+        response = main.list_pages("token", "db1", mode="summary", property_ids=["status-id"])
 
         self.assertTrue(response["ok"])
         self.assertEqual(response["action"], "list_pages")
@@ -86,10 +70,7 @@ class NotionAbilityTests(unittest.TestCase):
             "next_cursor": None,
         }
 
-        response = main.handle_invoke(
-            "token",
-            json.dumps({"action": "list_pages", "database_id": "db1", "mode": "full"}),
-        )
+        response = main.list_pages("token", "db1", mode="full")
 
         self.assertTrue(response["ok"])
         self.assertEqual(response["data"]["results"][0], raw_page)
@@ -114,17 +95,12 @@ class NotionAbilityTests(unittest.TestCase):
             },
         ]
 
-        response = main.handle_invoke(
+        response = main.update_page_property(
             "token",
-            json.dumps(
-                {
-                    "action": "update_page_property",
-                    "database_id": "db1",
-                    "page_id": "page-1",
-                    "property_id": "status-id",
-                    "value": {"status": {"name": "Done"}},
-                }
-            ),
+            "db1",
+            "page-1",
+            "status-id",
+            {"status": {"name": "Done"}},
         )
 
         self.assertTrue(response["ok"])
@@ -140,53 +116,84 @@ class NotionAbilityTests(unittest.TestCase):
         }
 
         with self.assertRaises(main.NotionAPIError) as ctx:
-            main.handle_invoke(
+            main.update_page_property(
                 "token",
-                json.dumps(
-                    {
-                        "action": "update_page_property",
-                        "database_id": "db1",
-                        "page_id": "page-1",
-                        "property_id": "status-id",
-                        "value": {"status": {"name": "Done"}},
-                    }
-                ),
+                "db1",
+                "page-1",
+                "status-id",
+                {"status": {"name": "Done"}},
             )
 
         self.assertEqual(ctx.exception.code, "database_mismatch")
 
-    def test_handle_invoke_requires_token_for_actions(self) -> None:
-        with self.assertRaises(main.NotionAPIError) as ctx:
-            main.handle_invoke("", json.dumps({"action": "list_pages", "database_id": "db1"}))
+    def test_require_token_rejects_missing_env(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(main.NotionAPIError) as ctx:
+                main.require_token("list-pages")
         self.assertEqual(ctx.exception.code, "missing_token")
 
-    @patch("abilities.connectors.notion.src.main.handle_invoke")
-    @patch("sys.stdin.read")
-    def test_main_emits_standardized_error_envelope(self, mock_read, mock_handle_invoke) -> None:
-        mock_read.return_value = '{"action":"list_pages"}'
-        mock_handle_invoke.side_effect = ValueError("bad request")
+    def test_status_cli_json(self) -> None:
+        result = self.runner.invoke(main.app, ["status", "--json"])
 
-        with patch("builtins.print") as mock_print:
-            exit_code = main.main(["invoke"])
-
-        self.assertEqual(exit_code, 1)
-        printed = mock_print.call_args[0][0]
-        payload = json.loads(printed)
-        self.assertFalse(payload["ok"])
-        self.assertEqual(payload["error"]["code"], "invalid_request")
-
-    @patch("abilities.connectors.notion.src.main.handle_invoke")
-    @patch("sys.stdin.read")
-    def test_main_preserves_no_input_status_behavior(self, mock_read, mock_handle_invoke) -> None:
-        mock_read.return_value = ""
-        mock_handle_invoke.return_value = main.build_status_payload("invoke")
-
-        with patch("builtins.print") as mock_print:
-            exit_code = main.main(["invoke"])
-
-        self.assertEqual(exit_code, 0)
-        payload = json.loads(mock_print.call_args[0][0])
+        self.assertEqual(result.exit_code, 0)
+        payload = json.loads(result.stdout)
         self.assertEqual(payload["ability"], "notion")
+
+    @patch("abilities.connectors.notion.src.main.notion_request")
+    def test_list_pages_cli_json(self, mock_notion_request) -> None:
+        mock_notion_request.return_value = {"results": [], "has_more": False, "next_cursor": None}
+
+        with patch.dict("os.environ", {"NOTION_API_TOKEN": "secret_test_token"}, clear=True):
+            result = self.runner.invoke(
+                main.app,
+                ["list-pages", "--database-id", "db1", "--json"],
+            )
+
+        self.assertEqual(result.exit_code, 0)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["action"], "list_pages")
+
+    @patch("abilities.connectors.notion.src.main.notion_request")
+    def test_update_page_property_cli_json(self, mock_notion_request) -> None:
+        mock_notion_request.side_effect = [
+            {"id": "page-1", "parent": {"type": "database_id", "database_id": "db1"}},
+            {
+                "id": "page-1",
+                "last_edited_time": "2026-05-05T13:00:00.000Z",
+                "properties": {"status-id": {"status": {"name": "Done"}}},
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            value_file = Path(tmpdir) / "value.json"
+            value_file.write_text('{"status": {"name": "Done"}}', encoding="utf-8")
+            with patch.dict("os.environ", {"NOTION_API_TOKEN": "secret_test_token"}, clear=True):
+                result = self.runner.invoke(
+                    main.app,
+                    [
+                        "update-page-property",
+                        "--database-id",
+                        "db1",
+                        "--page-id",
+                        "page-1",
+                        "--property-id",
+                        "status-id",
+                        "--value-file",
+                        str(value_file),
+                        "--json",
+                    ],
+                )
+
+        self.assertEqual(result.exit_code, 0)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["data"]["page_id"], "page-1")
+
+    def test_bin_help_invocation(self) -> None:
+        result = self.runner.invoke(main.app, ["--help"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Direct CLI for the Hermes Notion connector", result.stdout)
 
 
 if __name__ == "__main__":

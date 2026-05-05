@@ -10,7 +10,8 @@ uses to perform work.
 ### Ability
 
 The primary unit of capability in this repository. An ability is a discoverable
-and invokable component with its own manifest, runtime, and lifecycle commands.
+and directly executable component with its own manifest, runtime, and local
+documentation.
 
 ### Connector
 
@@ -27,15 +28,10 @@ web experience.
 An ability that provides long-running operational behavior for Hermes. Services
 are grouped separately from connectors and apps even when they share runtimes.
 
-### Registry
-
-The repo-level index that tells Hermes which abilities are discoverable and
-where their manifests live.
-
 ### Manifest
 
-The machine-readable contract for a single ability. It defines identity, type,
-runtime, environment requirements, and lifecycle commands.
+The lightweight machine-readable metadata for a single ability. It defines basic
+identity and execution hints, not a strict lifecycle contract.
 
 ### Database page
 

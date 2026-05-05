@@ -1,4 +1,5 @@
 import http from "node:http";
+import { pathToFileURL } from "node:url";
 
 export function getPort(): number {
   const raw = process.env.DASHBOARD_PORT ?? "3000";
@@ -6,13 +7,17 @@ export function getPort(): number {
   return Number.isNaN(value) ? 3000 : value;
 }
 
-export function buildDashboardPayload(mode: "serve" | "invoke") {
+export function buildDashboardPayload(mode: "serve" | "status") {
   return {
     ability: "dashboard",
     mode,
     port: getPort(),
     status: "ready",
   };
+}
+
+function printHelp(): void {
+  console.log(`dashboard <command>\n\nCommands:\n  serve     Start the dashboard HTTP server\n  status    Print dashboard status\n  help      Show this message`);
 }
 
 function startServer(): void {
@@ -27,17 +32,25 @@ function startServer(): void {
   });
 }
 
-function invoke(): void {
-  console.log(JSON.stringify(buildDashboardPayload("invoke"), null, 2));
+function printStatus(): void {
+  console.log(JSON.stringify(buildDashboardPayload("status"), null, 2));
 }
 
-const mode = process.argv[2] ?? "invoke";
+export function runCli(argv: string[] = process.argv.slice(2)): void {
+  const mode = argv[0] ?? "help";
 
-if (mode === "serve") {
-  startServer();
-} else if (mode === "invoke") {
-  invoke();
-} else {
-  console.error(`Unsupported mode: ${mode}`);
-  process.exitCode = 1;
+  if (mode === "serve") {
+    startServer();
+  } else if (mode === "status") {
+    printStatus();
+  } else if (mode === "help" || mode === "--help" || mode === "-h") {
+    printHelp();
+  } else {
+    console.error(`Unsupported mode: ${mode}`);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runCli();
 }

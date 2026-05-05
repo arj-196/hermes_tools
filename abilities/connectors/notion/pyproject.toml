@@ -3,7 +3,9 @@ name = "hermes-notion-ability"
 version = "0.1.0"
 description = "Hermes Notion connector ability."
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+  "typer>=0.20.0,<1.0.0",
+]
 
 [build-system]
 requires = ["setuptools>=68"]

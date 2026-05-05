@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch --experimental-strip-types src/index.ts serve",
+    "serve": "node --watch --experimental-strip-types src/index.ts serve",
+    "status": "node --experimental-strip-types src/index.ts status",
     "test": "node --test --experimental-strip-types tests/dashboard.test.ts",
-    "build": "pnpm exec tsc -p tsconfig.json",
-    "invoke": "node --experimental-strip-types src/index.ts invoke"
+    "build": "pnpm exec tsc -p tsconfig.json"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

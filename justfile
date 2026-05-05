@@ -4,22 +4,10 @@ default:
     @just --list
 
 list:
-    uv run --with pyyaml python abilityctl.py list
+    @find abilities -name ability.yaml | sort
 
-validate:
-    uv run --with pyyaml python abilityctl.py validate
+notion *args='--help':
+    ./bin/notion {{args}}
 
-install ability:
-    uv run --with pyyaml python abilityctl.py run {{ability}} install
-
-dev ability:
-    uv run --with pyyaml python abilityctl.py run {{ability}} dev
-
-test ability:
-    uv run --with pyyaml python abilityctl.py run {{ability}} test
-
-build ability:
-    uv run --with pyyaml python abilityctl.py run {{ability}} build
-
-invoke ability:
-    uv run --with pyyaml python abilityctl.py run {{ability}} invoke
+dashboard *args='help':
+    ./bin/dashboard {{args}}
