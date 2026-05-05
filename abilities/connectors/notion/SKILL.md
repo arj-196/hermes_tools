@@ -153,17 +153,23 @@ Command:
 ./bin/notion update-page-property \
   --page-id <page-id> \
   --property-id <property-id> \
-  --property-type <status|select|multi_select> \
+  --property-type <status|select|multi_select|rich_text|text> \
   --value-id <option-id> [--value-id <option-id> ...]
+
+./bin/notion update-page-property \
+  --page-id <page-id> \
+  --property-id <property-id> \
+  --property-type <rich_text|text> \
+  --text "<message>"
 
 ./bin/notion update-page-property ... --json
 ```
 
 Rules:
 - `--property-type` is mandatory.
-- `status` and `select` require exactly one `--value-id`.
-- `multi_select` requires one or more `--value-id`.
-- This command is intentionally option-type focused only.
+- `status` and `select` require exactly one `--value-id` and reject `--text`.
+- `multi_select` requires one or more `--value-id` and rejects `--text`.
+- `rich_text` and `text` require non-empty `--text` and reject `--value-id`.
 
 JSON shape:
 
@@ -206,5 +212,5 @@ Structured error shape:
 
 1. Run `get-database-properties --database-id ... --json`.
 2. Find the target property by `name` and capture its `property_id`, `type`, and valid option `id`s.
-3. Run `update-page-property` using `property_id`, mandatory `property_type`, and option `value_id`(s).
+3. Run `update-page-property` using `property_id`, mandatory `property_type`, and either option `value_id`(s) or `--text` for rich text.
 4. If task description/body is needed, run `get-page-content --page-id ... --json`.

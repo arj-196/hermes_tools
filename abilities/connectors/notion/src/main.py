@@ -322,24 +322,51 @@ def build_option_property_value(
     action: str,
     property_type: str,
     value_ids: list[str],
+    text: str | None = None,
 ) -> dict[str, Any]:
+    normalized_type = property_type.strip().lower()
     clean_value_ids = [value_id.strip() for value_id in value_ids if value_id.strip()]
-    if property_type in {"status", "select"}:
+    clean_text = text.strip() if isinstance(text, str) else ""
+
+    if normalized_type in {"status", "select"}:
+        if clean_text:
+            raise InvalidRequestError(
+                action,
+                f"'--text' is not allowed when '--property-type {normalized_type}' is used",
+            )
         if len(clean_value_ids) != 1:
             raise InvalidRequestError(
                 action,
-                f"'{property_type}' requires exactly one '--value-id'",
+                f"'{normalized_type}' requires exactly one '--value-id'",
             )
-        return {property_type: {"id": clean_value_ids[0]}}
+        return {normalized_type: {"id": clean_value_ids[0]}}
 
-    if property_type == "multi_select":
+    if normalized_type == "multi_select":
+        if clean_text:
+            raise InvalidRequestError(
+                action,
+                "'--text' is not allowed when '--property-type multi_select' is used",
+            )
         if not clean_value_ids:
             raise InvalidRequestError(action, "'multi_select' requires at least one '--value-id'")
         return {"multi_select": [{"id": value_id} for value_id in clean_value_ids]}
 
+    if normalized_type in {"rich_text", "text"}:
+        if clean_value_ids:
+            raise InvalidRequestError(
+                action,
+                f"'--value-id' is not allowed when '--property-type {normalized_type}' is used",
+            )
+        if not clean_text:
+            raise InvalidRequestError(
+                action,
+                f"'{normalized_type}' requires a non-empty '--text' value",
+            )
+        return {"rich_text": [{"type": "text", "text": {"content": clean_text}}]}
+
     raise InvalidRequestError(
         action,
-        "'property_type' must be one of: status, select, multi_select",
+        "'property_type' must be one of: status, select, multi_select, rich_text, text",
     )
 
 
@@ -594,13 +621,18 @@ def get_database_properties_command(
 def update_page_property_command(
     page_id: str = typer.Option(..., "--page-id", help="Target page ID."),
     property_id: str = typer.Option(..., "--property-id", help="Property ID to update."),
-    property_type: str = typer.Option(..., "--property-type", help="Property type: status, select, or multi_select."),
-    value_ids: list[str] = typer.Option(..., "--value-id", help="Option ID value. Repeat for multi_select."),
+    property_type: str = typer.Option(
+        ...,
+        "--property-type",
+        help="Property type: status, select, multi_select, rich_text, or text.",
+    ),
+    value_ids: list[str] = typer.Option([], "--value-id", help="Option ID value. Repeat for multi_select."),
+    text: str | None = typer.Option(None, "--text", help="Text content for rich_text/text properties."),
     json_output: bool = typer.Option(False, "--json", help="Emit structured JSON."),
 ) -> None:
     action = "update_page_property"
     try:
-        value = build_option_property_value(action, property_type, value_ids)
+        value = build_option_property_value(action, property_type, value_ids, text=text)
         payload = update_page_property(
             token=require_token("update-page-property"),
             page_id=page_id,

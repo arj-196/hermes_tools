@@ -215,6 +215,30 @@ class NotionAbilityTests(unittest.TestCase):
         value = main.build_option_property_value("update_page_property", "multi_select", ["opt-1", "opt-2"])
         self.assertEqual(value, {"multi_select": [{"id": "opt-1"}, {"id": "opt-2"}]})
 
+    def test_build_option_property_value_rich_text(self) -> None:
+        value = main.build_option_property_value(
+            "update_page_property",
+            "rich_text",
+            [],
+            text="error details",
+        )
+        self.assertEqual(
+            value,
+            {"rich_text": [{"type": "text", "text": {"content": "error details"}}]},
+        )
+
+    def test_build_option_property_value_text_alias(self) -> None:
+        value = main.build_option_property_value(
+            "update_page_property",
+            "text",
+            [],
+            text="error details",
+        )
+        self.assertEqual(
+            value,
+            {"rich_text": [{"type": "text", "text": {"content": "error details"}}]},
+        )
+
     def test_build_option_property_value_status_requires_exactly_one(self) -> None:
         with self.assertRaises(main.InvalidRequestError):
             main.build_option_property_value("update_page_property", "status", [])
@@ -230,6 +254,22 @@ class NotionAbilityTests(unittest.TestCase):
     def test_build_option_property_value_multi_select_requires_at_least_one(self) -> None:
         with self.assertRaises(main.InvalidRequestError):
             main.build_option_property_value("update_page_property", "multi_select", [])
+
+    def test_build_option_property_value_text_requires_non_empty_text(self) -> None:
+        with self.assertRaises(main.InvalidRequestError):
+            main.build_option_property_value("update_page_property", "rich_text", [], text=None)
+        with self.assertRaises(main.InvalidRequestError):
+            main.build_option_property_value("update_page_property", "text", [], text="  ")
+
+    def test_build_option_property_value_rejects_mixed_inputs(self) -> None:
+        with self.assertRaises(main.InvalidRequestError):
+            main.build_option_property_value("update_page_property", "status", ["opt-1"], text="x")
+        with self.assertRaises(main.InvalidRequestError):
+            main.build_option_property_value("update_page_property", "multi_select", ["opt-1"], text="x")
+        with self.assertRaises(main.InvalidRequestError):
+            main.build_option_property_value("update_page_property", "rich_text", ["opt-1"], text="x")
+        with self.assertRaises(main.InvalidRequestError):
+            main.build_option_property_value("update_page_property", "text", ["opt-1"], text="x")
 
     def test_build_option_property_value_invalid_type(self) -> None:
         with self.assertRaises(main.InvalidRequestError):
@@ -454,6 +494,40 @@ class NotionAbilityTests(unittest.TestCase):
         self.assertEqual(payload["data"]["page_id"], "page-1")
 
     @patch("abilities.connectors.notion.src.main.notion_request")
+    def test_update_page_property_cli_rich_text_json(self, mock_notion_request) -> None:
+        mock_notion_request.return_value = {
+            "id": "page-1",
+            "last_edited_time": "2026-05-05T13:00:00.000Z",
+            "properties": {
+                "error-log-id": {
+                    "rich_text": [{"type": "text", "plain_text": "rate limit"}],
+                }
+            },
+        }
+
+        with patch.dict("os.environ", {"NOTION_API_KEY": "secret_test_token"}, clear=True):
+            result = self.runner.invoke(
+                main.app,
+                [
+                    "update-page-property",
+                    "--page-id",
+                    "page-1",
+                    "--property-id",
+                    "error-log-id",
+                    "--property-type",
+                    "rich_text",
+                    "--text",
+                    "rate limit",
+                    "--json",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["data"]["page_id"], "page-1")
+
+    @patch("abilities.connectors.notion.src.main.notion_request")
     def test_update_page_property_cli_multi_select_json(self, mock_notion_request) -> None:
         mock_notion_request.return_value = {
             "id": "page-1",
@@ -502,6 +576,70 @@ class NotionAbilityTests(unittest.TestCase):
             )
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Missing option '--property-type'", result.stderr)
+
+    def test_update_page_property_cli_requires_value_id_for_status(self) -> None:
+        with patch.dict("os.environ", {"NOTION_API_KEY": "secret_test_token"}, clear=True):
+            result = self.runner.invoke(
+                main.app,
+                [
+                    "update-page-property",
+                    "--page-id",
+                    "page-1",
+                    "--property-id",
+                    "status-id",
+                    "--property-type",
+                    "status",
+                    "--json",
+                ],
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("requires exactly one '--value-id'", payload["error"]["message"])
+
+    def test_update_page_property_cli_requires_text_for_rich_text(self) -> None:
+        with patch.dict("os.environ", {"NOTION_API_KEY": "secret_test_token"}, clear=True):
+            result = self.runner.invoke(
+                main.app,
+                [
+                    "update-page-property",
+                    "--page-id",
+                    "page-1",
+                    "--property-id",
+                    "error-log-id",
+                    "--property-type",
+                    "rich_text",
+                    "--json",
+                ],
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("requires a non-empty '--text' value", payload["error"]["message"])
+
+    def test_update_page_property_cli_rejects_mixed_text_and_value_id(self) -> None:
+        with patch.dict("os.environ", {"NOTION_API_KEY": "secret_test_token"}, clear=True):
+            result = self.runner.invoke(
+                main.app,
+                [
+                    "update-page-property",
+                    "--page-id",
+                    "page-1",
+                    "--property-id",
+                    "status-id",
+                    "--property-type",
+                    "status",
+                    "--value-id",
+                    "done-id",
+                    "--text",
+                    "should fail",
+                    "--json",
+                ],
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("'--text' is not allowed", payload["error"]["message"])
 
     def test_bin_help_invocation(self) -> None:
         result = self.runner.invoke(main.app, ["--help"])

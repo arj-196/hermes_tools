@@ -27,6 +27,12 @@ NOTION_PARENT_PAGE_ID=optional-legacy-value
   --property-id status-id \
   --property-type status \
   --value-id done-option-id
+
+./bin/notion update-page-property \
+  --page-id your-page-id \
+  --property-id error-log-id \
+  --property-type rich_text \
+  --text "Error: upstream timeout"
 ```
 
 If `bin/` is on your `PATH`, you can run `notion ...` directly.
@@ -41,7 +47,7 @@ If `bin/` is on your `PATH`, you can run `notion ...` directly.
 
 ## Property Update Inputs
 
-`update-page-property` uses direct option IDs.
+`update-page-property` uses direct property IDs and supports option and rich text updates.
 
 Examples:
 
@@ -60,7 +66,19 @@ Examples:
   --property-type multi_select \
   --value-id tag-option-id-1 \
   --value-id tag-option-id-2
+
+# rich_text/text: non-empty text value
+./bin/notion update-page-property \
+  --page-id your-page-id \
+  --property-id error-log-id \
+  --property-type rich_text \
+  --text "Rate limit from provider"
 ```
+
+Rules:
+- `status` and `select` require exactly one `--value-id` and reject `--text`.
+- `multi_select` requires one or more `--value-id` and rejects `--text`.
+- `rich_text` and `text` require non-empty `--text` and reject `--value-id`.
 
 ## Notes
 
