@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -142,18 +143,75 @@ def run_command(
     cwd: Path | None = None,
     input_text: str | None = None,
     check: bool = True,
+    stream: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        command,
-        cwd=str(cwd) if cwd else None,
-        input=input_text,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    if stream:
+        result = run_command_streaming(command, cwd=cwd, input_text=input_text)
+    else:
+        result = subprocess.run(
+            command,
+            cwd=str(cwd) if cwd else None,
+            input=input_text,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
     if check and result.returncode != 0:
         raise CommandError(command, result.returncode, result.stdout, result.stderr)
     return result
+
+
+def run_command_streaming(
+    command: list[str],
+    cwd: Path | None = None,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        cwd=str(cwd) if cwd else None,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def forward_stream(pipe: Any, sink: Any, chunks: list[str]) -> None:
+        for line in iter(pipe.readline, ""):
+            chunks.append(line)
+            sink.write(line)
+            sink.flush()
+        pipe.close()
+
+    stdout_thread = threading.Thread(
+        target=forward_stream,
+        args=(process.stdout, sys.stdout, stdout_chunks),
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=forward_stream,
+        args=(process.stderr, sys.stderr, stderr_chunks),
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+
+    if process.stdin is not None and input_text is not None:
+        process.stdin.write(input_text)
+        process.stdin.close()
+
+    returncode = process.wait()
+    stdout_thread.join()
+    stderr_thread.join()
+
+    return subprocess.CompletedProcess(
+        args=command,
+        returncode=returncode,
+        stdout="".join(stdout_chunks),
+        stderr="".join(stderr_chunks),
+    )
 
 
 def run_json_command(command: list[str], cwd: Path | None = None) -> dict[str, Any]:
@@ -723,7 +781,13 @@ def codex_report_is_usable(stdout: str, stderr: str) -> bool:
 
 
 def run_codex(repo: Path, config: Config, prompt: str) -> None:
-    result = run_command(build_codex_command(repo, config.codex_model), cwd=repo, input_text=prompt, check=False)
+    result = run_command(
+        build_codex_command(repo, config.codex_model),
+        cwd=repo,
+        input_text=prompt,
+        check=False,
+        stream=True,
+    )
     if result.returncode != 0:
         raise AutoCoderError("codex_failure", result.stderr or result.stdout or "Codex failed")
     if not codex_report_is_usable(result.stdout, result.stderr):
