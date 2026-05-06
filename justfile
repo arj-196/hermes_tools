@@ -9,5 +9,8 @@ list:
 notion *args='--help':
     ./bin/notion {{args}}
 
+auto-coder *args='--help':
+    ./bin/auto-coder {{args}}
+
 dashboard *args='help':
     ./bin/dashboard {{args}}

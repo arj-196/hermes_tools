@@ -28,6 +28,11 @@ web experience.
 An ability that provides long-running operational behavior for Hermes. Services
 are grouped separately from connectors and apps even when they share runtimes.
 
+### Auto-coder service
+
+The service ability that claims coding tasks from Notion, delegates repository
+edits to Codex, and completes the git workflow for one task per run.
+
 ### Manifest
 
 The lightweight machine-readable metadata for a single ability. It defines basic
