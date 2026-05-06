@@ -6,6 +6,8 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +35,9 @@ class Config:
     error_log_property: str
     codex_model: str
     git_completion_mode: str
+    openrouter_api_key: str
+    commit_model: str
+    commit_max_context_tokens: int
 
 
 @dataclass(frozen=True)
@@ -122,6 +127,13 @@ def load_config() -> Config:
             "AUTO_CODER_GIT_COMPLETION_MODE", "auto_merge_main"
         ).strip()
         or "auto_merge_main",
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
+        commit_model=os.getenv("AUTO_CODER_COMMIT_MODEL", "openrouter/gpt-oss-120b").strip()
+        or "openrouter/gpt-oss-120b",
+        commit_max_context_tokens=max(
+            1024,
+            int(os.getenv("AUTO_CODER_COMMIT_MAX_CONTEXT_TOKENS", "16000").strip() or "16000"),
+        ),
     )
 
 
@@ -145,8 +157,6 @@ def run_command(
 
 
 def run_json_command(command: list[str], cwd: Path | None = None) -> dict[str, Any]:
-    # print command for debugging, but don't log the full output since it may contain sensitive information.
-    emit("debug_run_command", command=command, cwd=str(cwd) if cwd else None)
     try:
         result = run_command(command, cwd=cwd)
     except CommandError as exc:
@@ -455,6 +465,184 @@ def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     return run_command(["git", *args], cwd=repo, check=check)
 
 
+def estimate_chars_budget_from_tokens(tokens: int) -> int:
+    # Approximation for prompt safety: 1 token ~= 4 chars in English/code-heavy text.
+    return max(4000, tokens * 4)
+
+
+def split_diff_by_file(diff_text: str) -> list[str]:
+    chunks = re.split(r"(?=^diff --git )", diff_text, flags=re.MULTILINE)
+    return [chunk for chunk in chunks if chunk.strip()]
+
+
+def build_diff_payload(diff_text: str, max_chars: int) -> str:
+    if len(diff_text) <= max_chars:
+        return diff_text
+
+    chunks = split_diff_by_file(diff_text)
+    if not chunks:
+        return diff_text[: max_chars - 64] + "\n...[truncated]\n"
+
+    selected: list[str] = []
+    total = 0
+    for chunk in sorted(chunks, key=len):
+        if total + len(chunk) + 1 > max_chars:
+            continue
+        selected.append(chunk)
+        total += len(chunk) + 1
+    if selected:
+        return "\n".join(selected) + "\n\n...[truncated: some files omitted due to context budget]\n"
+
+    per_file_budget = max(512, max_chars // max(1, len(chunks)))
+    clipped: list[str] = []
+    total = 0
+    for chunk in chunks:
+        piece = chunk if len(chunk) <= per_file_budget else chunk[: per_file_budget - 32] + "\n...[truncated]\n"
+        if total + len(piece) + 1 > max_chars:
+            break
+        clipped.append(piece)
+        total += len(piece) + 1
+    if clipped:
+        return "\n".join(clipped) + "\n\n...[truncated per-file due to context budget]\n"
+    return ""
+
+
+def build_commit_prompt(task_id: str, title: str, files: str, diff_stat: str, diff_payload: str) -> str:
+    return (
+        "You are writing a git commit message.\n"
+        "Return ONLY the commit message text, no markdown, no code fences, no preamble.\n\n"
+        "Requirements:\n"
+        "1) First line MUST be a conventional commit subject: type(scope): summary\n"
+        "2) Subject line max 72 characters.\n"
+        "3) Include a body with concise bullet points explaining all major changes.\n"
+        "4) Include why/impact where inferable from changes.\n"
+        f"5) Final line must be exactly: Notion task: {task_id}\n\n"
+        f"Task title: {title}\n\n"
+        "Changed files:\n"
+        f"{files or '(none)'}\n\n"
+        "Diff stat:\n"
+        f"{diff_stat or '(none)'}\n\n"
+        "Code diff:\n"
+        f"{diff_payload or '(diff omitted due to context budget)'}\n"
+    )
+
+
+def parse_openrouter_commit_message(response_text: str) -> str:
+    try:
+        payload = json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid JSON response from OpenRouter") from exc
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("OpenRouter response missing choices")
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+        return "\n".join(parts).strip()
+    raise ValueError("OpenRouter response missing message content")
+
+
+def validate_generated_commit_message(message: str) -> str:
+    lines = [line.rstrip() for line in message.strip().splitlines()]
+    if not lines:
+        raise ValueError("Generated commit message is empty")
+    subject = lines[0].strip()
+    if len(subject) > 72:
+        subject = subject[:72].rstrip()
+    if not re.match(r"^[a-z]+(\([^)]+\))?: .+", subject):
+        raise ValueError("Generated subject is not a valid conventional commit")
+    body_lines = [line for line in lines[1:] if line.strip()]
+    if len(body_lines) < 2:
+        raise ValueError("Generated commit message body is too short")
+    if len("\n".join(body_lines)) < 40:
+        raise ValueError("Generated commit message body is not descriptive enough")
+    normalized = "\n".join([subject, "", *body_lines]).strip()
+    return normalized[:4000].rstrip()
+
+
+def infer_commit_type(title: str) -> str:
+    lower = title.lower()
+    if any(word in lower for word in ["fix", "bug", "error", "repair", "patch"]):
+        return "fix"
+    if any(word in lower for word in ["refactor", "cleanup", "restructure"]):
+        return "refactor"
+    if any(word in lower for word in ["chore", "deps", "dependency", "build", "ci"]):
+        return "chore"
+    return "feat"
+
+
+def build_fallback_commit_message(task_id: str, title: str, files: str, diff_stat: str) -> str:
+    commit_type = infer_commit_type(title)
+    subject = f"{commit_type}: {title.strip() or 'update implementation'}"
+    if len(subject) > 72:
+        subject = subject[:72].rstrip()
+    body: list[str] = [
+        "Changes included in this commit:",
+        f"- {diff_stat or 'updated repository files'}",
+    ]
+    if files.strip():
+        body.append("- Files changed:")
+        for file_line in files.splitlines():
+            trimmed = file_line.strip()
+            if trimmed:
+                body.append(f"  - {trimmed}")
+    body.append("")
+    body.append(f"Notion task: {task_id}")
+    return "\n".join([subject, "", *body]).strip()
+
+
+def generate_commit_message_with_openrouter(repo: Path, config: Config, task_id: str, title: str) -> str:
+    files = git(repo, "diff", "--cached", "--name-only").stdout.strip()
+    diff_stat = git(repo, "diff", "--cached", "--stat").stdout.strip()
+    full_diff = git(repo, "diff", "--cached").stdout
+    max_chars = estimate_chars_budget_from_tokens(config.commit_max_context_tokens)
+    diff_payload = build_diff_payload(full_diff, max_chars)
+    prompt = build_commit_prompt(task_id, title, files, diff_stat, diff_payload)
+    fallback = build_fallback_commit_message(task_id, title, files, diff_stat)
+
+    emit("commit_message_generation_started", model=config.commit_model)
+    if not config.openrouter_api_key:
+        emit("commit_message_fallback_used", reason="missing_openrouter_api_key")
+        return fallback
+
+    request_payload = {
+        "model": config.commit_model,
+        "temperature": 0.2,
+        "messages": [
+            {"role": "system", "content": "You produce high-quality git commit messages."},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    data = json.dumps(request_payload).encode("utf-8")
+    request = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=data,
+        headers={
+            "Authorization": f"Bearer {config.openrouter_api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            response_body = response.read().decode("utf-8")
+        generated = parse_openrouter_commit_message(response_body)
+        validated = validate_generated_commit_message(generated)
+        if f"Notion task: {task_id}" not in validated:
+            validated = f"{validated}\n\nNotion task: {task_id}"
+        emit("commit_message_generation_succeeded", model=config.commit_model)
+        return validated[:4000].rstrip()
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        emit("commit_message_fallback_used", reason=exc.__class__.__name__)
+        return fallback
+
+
 def validate_repo(repo: Path) -> None:
     if not repo.exists() or not repo.is_dir():
         raise AutoCoderError("missing_repo", f"Repository does not exist: {repo}")
@@ -553,13 +741,14 @@ def prepare_git_branch(repo: Path, task_id: str, title: str) -> str:
         raise AutoCoderError("merge_failure", str(exc)) from exc
 
 
-def complete_git_workflow(repo: Path, task_id: str, title: str, branch: str) -> None:
+def complete_git_workflow(repo: Path, config: Config, task_id: str, title: str, branch: str) -> None:
     try:
         status = git(repo, "status", "--porcelain").stdout.strip()
         if not status:
             raise AutoCoderError("codex_failure", "Codex completed without producing repository changes")
         git(repo, "add", "-A")
-        git(repo, "commit", "-m", f"{title}\n\nNotion task: {task_id}")
+        commit_message = generate_commit_message_with_openrouter(repo, config, task_id, title)
+        git(repo, "commit", "-m", commit_message)
         git(repo, "checkout", "main")
         git(repo, "merge", "--no-ff", branch, "-m", f"Merge {branch}")
         git(repo, "push", "origin", "main")
@@ -627,7 +816,7 @@ def run_once(config: Config) -> int:
         run_codex(repo, config, prompt)
         emit("codex_finished", task_id=page_id, success=True)
         emit("progress", stage="git_complete_workflow", task_id=page_id, branch=branch)
-        complete_git_workflow(repo, page_id, title, branch)
+        complete_git_workflow(repo, config, page_id, title, branch)
         emit("progress", stage="notion_mark_done", task_id=page_id)
         set_status(page_id, bindings, STATUS_DONE)
         set_error_log(page_id, bindings, "")
@@ -673,6 +862,9 @@ def build_status_payload(config: Config) -> dict[str, Any]:
             "apps_root_exists": config.apps_root.exists(),
             "git_completion_mode": config.git_completion_mode,
             "codex_model": config.codex_model,
+            "commit_model": config.commit_model,
+            "openrouter_api_key_configured": bool(config.openrouter_api_key),
+            "commit_max_context_tokens": config.commit_max_context_tokens,
         },
     }
 

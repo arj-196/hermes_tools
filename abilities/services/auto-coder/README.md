@@ -25,6 +25,9 @@ Optional field-name configuration:
 - `AUTO_CODER_ERROR_LOG_PROPERTY`, defaults to `Error Log`
 - `AUTO_CODER_CODEX_MODEL`, defaults to `gpt-5.3-codex`
 - `AUTO_CODER_GIT_COMPLETION_MODE`, defaults to `auto_merge_main`
+- `OPENROUTER_API_KEY`, used to generate diff-aware commit messages
+- `AUTO_CODER_COMMIT_MODEL`, defaults to `openrouter/gpt-oss-120b`
+- `AUTO_CODER_COMMIT_MAX_CONTEXT_TOKENS`, defaults to `16000`
 
 ## Task Format
 
