@@ -42,6 +42,7 @@ from abilities.services.shared_observability import (
 
 NOTION_BIN = ROOT / "bin" / "notion"
 AUTO_CODER_BIN = ROOT / "bin" / "auto-coder"
+RUN_WITH_ENV_BIN = ROOT / "bin" / "run-with-env"
 SERVICE_NAME = "auto-coder"
 LOG_FORMAT = "[<level>{level}</level>] [{extra[time_utc]}] [{extra[service]}] [{extra[event]}] [{message}]"
 
@@ -1197,11 +1198,11 @@ register_history_command(app, root=ROOT, service=SERVICE_NAME)
 @app.command("install-cron")
 def install_cron(
     schedule: str = typer.Option(
-        "*/15 * * * *", help="Cron schedule expression to print."
+        "*/5 * * * *", help="Cron schedule expression to print."
     ),
 ) -> None:
     """Print a crontab entry for this service without installing it."""
-    command = f"cd {ROOT} && {AUTO_CODER_BIN} run"
+    command = f"cd {ROOT} && {RUN_WITH_ENV_BIN} {AUTO_CODER_BIN} run"
     typer.echo(f"{schedule} {command}")
 
 

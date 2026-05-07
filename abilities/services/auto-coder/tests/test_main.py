@@ -23,6 +23,15 @@ SPEC.loader.exec_module(main)
 
 
 class AutoCoderTests(unittest.TestCase):
+    def test_install_cron_uses_env_wrapper(self) -> None:
+        result = CliRunner().invoke(main.app, ["install-cron"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("*/15 * * * *", result.output)
+        self.assertIn(f"cd {main.ROOT} &&", result.output)
+        self.assertIn(
+            f"{main.RUN_WITH_ENV_BIN} {main.AUTO_CODER_BIN} run", result.output
+        )
+
     def config(self) -> main.Config:
         return main.Config(
             notion_database_id="db1",

@@ -36,6 +36,7 @@ from abilities.services.shared_observability import (
 )
 
 CHORES_BIN = ROOT / "bin" / "chores"
+RUN_WITH_ENV_BIN = ROOT / "bin" / "run-with-env"
 DEFAULT_TIMEZONE = "Europe/Paris"
 DEFAULT_STATE_FILE = ".robin/chores-state.json"
 DEFAULT_CODEX_INIT_COMMAND = 'codex exec "Reply with exactly: ok"'
@@ -327,7 +328,7 @@ def install_cron(
     ),
 ) -> None:
     """Print a crontab entry for this service without installing it."""
-    command = f"cd {ROOT} && {CHORES_BIN} run"
+    command = f"cd {ROOT} && {RUN_WITH_ENV_BIN} {CHORES_BIN} run"
     typer.echo(f"{schedule} {command}")
 
 

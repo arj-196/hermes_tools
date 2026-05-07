@@ -26,6 +26,13 @@ from abilities.services import shared_observability as shared  # noqa: E402
 
 
 class ChoresTests(unittest.TestCase):
+    def test_install_cron_uses_env_wrapper(self) -> None:
+        result = CliRunner().invoke(main.app, ["install-cron"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("*/5 * * * *", result.output)
+        self.assertIn(f"cd {main.ROOT} &&", result.output)
+        self.assertIn(f"{main.RUN_WITH_ENV_BIN} {main.CHORES_BIN} run", result.output)
+
     def test_emit_writes_human_log(self) -> None:
         out = io.StringIO()
         with contextlib.redirect_stdout(out), patch.dict(os.environ, {}, clear=True):
