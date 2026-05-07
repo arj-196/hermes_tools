@@ -32,13 +32,14 @@ from abilities.services.shared_observability import (
     get_latest_run,
     load_observability_config,
     register_history_command,
+    resolve_robin_home,
     resolve_log_level,
 )
 
 CHORES_BIN = ROOT / "bin" / "chores"
 RUN_WITH_ENV_BIN = ROOT / "bin" / "run-with-env"
 DEFAULT_TIMEZONE = "Europe/Paris"
-DEFAULT_STATE_FILE = ".robin/chores-state.json"
+DEFAULT_STATE_FILE = "state/chores-state.json"
 DEFAULT_CODEX_INIT_COMMAND = 'codex exec "Reply with exactly: ok"'
 SERVICE_NAME = "chores"
 LOG_FORMAT = "[<level>{level}</level>] [{extra[time_utc]}] [{extra[service]}] [{extra[event]}] [{message}]"
@@ -124,11 +125,18 @@ def expand_path(value: str) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(value))).resolve()
 
 
+def resolve_path_from_robin_home(value: str) -> Path:
+    expanded = Path(os.path.expandvars(os.path.expanduser(value)))
+    if expanded.is_absolute():
+        return expanded.resolve()
+    return (resolve_robin_home(ROOT) / expanded).resolve()
+
+
 def load_config() -> Config:
     return Config(
         timezone_name=os.getenv("CHORES_TIMEZONE", DEFAULT_TIMEZONE).strip()
         or DEFAULT_TIMEZONE,
-        state_file=expand_path(
+        state_file=resolve_path_from_robin_home(
             os.getenv("CHORES_STATE_FILE", DEFAULT_STATE_FILE).strip()
             or DEFAULT_STATE_FILE
         ),

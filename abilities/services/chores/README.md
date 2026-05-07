@@ -15,11 +15,12 @@ attempt/success state for daily dedupe and retries.
 
 ## Configuration
 
+- `ROBIN_HOME`: base directory for Robin runtime files, defaults to `.robin` under repo root
 - `CHORES_TIMEZONE`: timezone used for due checks, defaults to `Europe/Paris`
-- `CHORES_STATE_FILE`: JSON state file path, defaults to `.robin/chores-state.json`
+- `CHORES_STATE_FILE`: JSON state file path, defaults to `state/chores-state.json` (relative to `ROBIN_HOME` unless absolute)
 - `CHORES_CODEX_INIT_COMMAND`: command for Codex initialization chore
-- `ROBIN_RUN_LEDGER_DIR`: directory containing `run-ledger.jsonl`, defaults to `.robin`
-- `ROBIN_LOG_RUNS_DIR`: directory containing per-run log files, defaults to `.robin/logs`
+- `ROBIN_RUN_LEDGER_DIR`: directory containing `run-ledger.jsonl`, defaults to `run-ledger` (relative to `ROBIN_HOME` unless absolute)
+- `ROBIN_LOG_RUNS_DIR`: directory containing per-run log files, defaults to `logs` (relative to `ROBIN_HOME` unless absolute)
 - `ROBIN_TELEGRAM_BOT_TOKEN`: optional Telegram bot token for failure alerts
 - `ROBIN_TELEGRAM_CHAT_ID`: optional Telegram chat ID for failure alerts
 - `ROBIN_LOG_LEVEL`: log verbosity, defaults to `info` (`debug|info|warn|error`)
@@ -42,8 +43,8 @@ codex exec "Reply with exactly: ok"
 
 Each cron execution also creates:
 
-- a `run ledger` entry in `.robin/run-ledger.jsonl`
-- a dedicated `run log` file at `.robin/logs/chores/<YYYY-MM-DD>-<run_id>.log`
+- a `run ledger` entry at `<ROBIN_HOME>/<ROBIN_RUN_LEDGER_DIR>/run-ledger.jsonl`
+- a dedicated `run log` file at `<ROBIN_HOME>/<ROBIN_LOG_RUNS_DIR>/chores/<YYYY-MM-DD>-<run_id>.log`
 
 Use `./bin/chores history --limit 10` to inspect recent finished runs.
 Add `--show-log` to print the stored log contents for those runs.

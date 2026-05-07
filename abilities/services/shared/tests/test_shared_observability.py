@@ -20,6 +20,34 @@ from abilities.services import shared_observability as shared  # noqa: E402
 
 
 class SharedObservabilityTests(unittest.TestCase):
+    def test_load_observability_config_uses_robin_home_for_relative_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {
+                "ROBIN_HOME": str(Path(tmp) / "robin-home"),
+                "ROBIN_RUN_LEDGER_DIR": "run-ledger",
+                "ROBIN_LOG_RUNS_DIR": "logs",
+            },
+            clear=False,
+        ):
+            config = shared.load_observability_config(ROOT)
+        self.assertEqual(config.ledger_dir, (Path(tmp) / "robin-home" / "run-ledger").resolve())
+        self.assertEqual(config.logs_dir, (Path(tmp) / "robin-home" / "logs").resolve())
+
+    def test_load_observability_config_keeps_absolute_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {
+                "ROBIN_HOME": str(Path(tmp) / "robin-home"),
+                "ROBIN_RUN_LEDGER_DIR": str(Path(tmp) / "abs-ledger"),
+                "ROBIN_LOG_RUNS_DIR": str(Path(tmp) / "abs-logs"),
+            },
+            clear=False,
+        ):
+            config = shared.load_observability_config(ROOT)
+        self.assertEqual(config.ledger_dir, (Path(tmp) / "abs-ledger").resolve())
+        self.assertEqual(config.logs_dir, (Path(tmp) / "abs-logs").resolve())
+
     def append_finished_run(
         self,
         config: shared.ObservabilityConfig,

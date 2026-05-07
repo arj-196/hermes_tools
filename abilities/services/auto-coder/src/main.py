@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import fcntl
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +39,7 @@ from abilities.services.shared_observability import (
     get_latest_run,
     load_observability_config,
     register_history_command,
+    resolve_robin_home,
     resolve_log_level,
 )
 
@@ -46,6 +48,8 @@ AUTO_CODER_BIN = ROOT / "bin" / "auto-coder"
 RUN_WITH_ENV_BIN = ROOT / "bin" / "run-with-env"
 SERVICE_NAME = "auto-coder"
 LOG_FORMAT = "[<level>{level}</level>] [{extra[time_utc]}] [{extra[service]}] [{extra[event]}] [{message}]"
+DEFAULT_LOCKS_DIR = "locks"
+RUN_LOCK_FILENAME = "auto-coder.lock"
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,10 @@ class AutoCoderError(Exception):
         super().__init__(message)
         self.failure_code = failure_code
         self.message = message
+
+
+class AlreadyRunningError(Exception):
+    pass
 
 
 class CommandError(RuntimeError):
@@ -190,6 +198,13 @@ def expand_path(value: str) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(value))).resolve()
 
 
+def resolve_path_from_robin_home(root: Path, value: str) -> Path:
+    expanded = Path(os.path.expandvars(os.path.expanduser(value)))
+    if expanded.is_absolute():
+        return expanded.resolve()
+    return (resolve_robin_home(root) / expanded).resolve()
+
+
 def load_config() -> Config:
     return Config(
         notion_database_id=os.getenv("NOTION_TASK_DATABASE_ID", "").strip(),
@@ -223,6 +238,11 @@ def load_config() -> Config:
     )
 
 
+def resolve_run_lock_path() -> Path:
+    locks_dir = os.getenv("AUTO_CODER_LOCKS_DIR", DEFAULT_LOCKS_DIR).strip() or DEFAULT_LOCKS_DIR
+    return resolve_path_from_robin_home(ROOT, locks_dir) / RUN_LOCK_FILENAME
+
+
 def run_command(
     command: list[str],
     cwd: Path | None = None,
@@ -244,6 +264,36 @@ def run_command(
     if check and result.returncode != 0:
         raise CommandError(command, result.returncode, result.stdout, result.stderr)
     return result
+
+
+class RunLock:
+    def __init__(self, lock_path: Path) -> None:
+        self.lock_path = lock_path
+        self._handle: Any | None = None
+
+    def __enter__(self) -> "RunLock":
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self._handle = self.lock_path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            self._handle.close()
+            self._handle = None
+            raise AlreadyRunningError("Another auto-coder instance is already running") from exc
+        self._handle.seek(0)
+        self._handle.truncate(0)
+        self._handle.write(f"{os.getpid()}\n")
+        self._handle.flush()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self._handle is None:
+            return
+        try:
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._handle.close()
+            self._handle = None
 
 
 def run_command_streaming(
@@ -1000,7 +1050,7 @@ def get_page_id(page: dict[str, Any]) -> str:
     return page_id
 
 
-def run_once(config: Config) -> RunOutcome:
+def validate_run_prerequisites(config: Config) -> RunOutcome | None:
     if not config.notion_database_id:
         emit_error(
             "run_failed",
@@ -1025,27 +1075,21 @@ def run_once(config: Config) -> RunOutcome:
             failure_code="out_of_scope",
             message=f"Unsupported completion mode: {config.git_completion_mode}",
         )
+    return None
 
-    emit("run_started", database_id=config.notion_database_id)
+
+def initialize_notion_bindings(config: Config) -> SchemaBindings:
     emit_debug("progress", stage="notion_status_check")
     run_json_command(notion_command("status"))
     emit_debug("progress", stage="notion_load_database_properties")
     properties = run_json_command(
-        notion_command(
-            "get-database-properties", "--database-id", config.notion_database_id
-        )
+        notion_command("get-database-properties", "--database-id", config.notion_database_id)
     )
     emit_debug("progress", stage="notion_bind_schema")
-    bindings = discover_schema(properties, config)
-    emit_debug("progress", stage="notion_list_pages")
-    pages = run_json_command(
-        notion_command("list-pages", "--database-id", config.notion_database_id)
-    )
-    page = select_todo_page(pages, bindings)
-    if page is None:
-        emit("run_completed", result="no_task")
-        return RunOutcome(result="no_task", exit_code=0)
+    return discover_schema(properties, config)
 
+
+def process_page(config: Config, bindings: SchemaBindings, page: dict[str, Any]) -> RunOutcome:
     page_id = get_page_id(page)
     title = extract_page_title(page)
     project = get_property_value(page, bindings.project)
@@ -1056,9 +1100,7 @@ def run_once(config: Config) -> RunOutcome:
         set_error_log(page_id, bindings, "")
         emit("task_claimed", task_id=page_id)
         emit_debug("progress", stage="task_load_content", task_id=page_id)
-        page_content = run_json_command(
-            notion_command("get-page-content", "--page-id", page_id)
-        )
+        page_content = run_json_command(notion_command("get-page-content", "--page-id", page_id))
         emit_debug("progress", stage="task_extract_sections", task_id=page_id)
         sections = extract_task_sections(page_content)
         emit_debug("progress", stage="repo_resolve", task_id=page_id, project=project)
@@ -1078,14 +1120,11 @@ def run_once(config: Config) -> RunOutcome:
         )
         run_codex(repo, config, prompt)
         emit("codex_finished", task_id=page_id, success=True)
-        emit_debug(
-            "progress", stage="git_complete_workflow", task_id=page_id, branch=branch
-        )
+        emit_debug("progress", stage="git_complete_workflow", task_id=page_id, branch=branch)
         complete_git_workflow(repo, config, page_id, title, branch)
         emit_debug("progress", stage="notion_mark_done", task_id=page_id)
         set_status(page_id, bindings, STATUS_DONE)
         set_error_log(page_id, bindings, "")
-        emit("run_completed", result="done", task_id=page_id)
         return RunOutcome(
             result="ok",
             exit_code=0,
@@ -1106,9 +1145,7 @@ def run_once(config: Config) -> RunOutcome:
         )
         try:
             block_task(page_id, bindings, exc.failure_code, exc.message)
-        except (
-            Exception
-        ) as block_exc:  # noqa: BLE001 - final reconciliation should be visible.
+        except Exception as block_exc:  # noqa: BLE001
             emit_error(
                 "run_failed",
                 task_id=page_id,
@@ -1122,12 +1159,6 @@ def run_once(config: Config) -> RunOutcome:
                 message=str(block_exc),
                 metadata={"task_id": page_id, "project": project},
             )
-        emit(
-            "run_completed",
-            result="blocked",
-            task_id=page_id,
-            failure_code=exc.failure_code,
-        )
         return RunOutcome(
             result="blocked",
             exit_code=1,
@@ -1135,9 +1166,7 @@ def run_once(config: Config) -> RunOutcome:
             message=exc.message,
             metadata={"task_id": page_id, "project": project},
         )
-    except (
-        Exception
-    ) as exc:  # noqa: BLE001 - ensure uncaught errors are surfaced as structured output.
+    except Exception as exc:  # noqa: BLE001
         emit_error(
             "run_failed",
             task_id=page_id,
@@ -1151,6 +1180,76 @@ def run_once(config: Config) -> RunOutcome:
             message=str(exc) or exc.__class__.__name__,
             metadata={"task_id": page_id, "project": project},
         )
+
+
+def run_once(config: Config) -> RunOutcome:
+    prerequisite_outcome = validate_run_prerequisites(config)
+    if prerequisite_outcome is not None:
+        return prerequisite_outcome
+
+    emit("run_started", database_id=config.notion_database_id)
+    bindings = initialize_notion_bindings(config)
+    emit_debug("progress", stage="notion_list_pages")
+    pages = run_json_command(
+        notion_command("list-pages", "--database-id", config.notion_database_id)
+    )
+    page = select_todo_page(pages, bindings)
+    if page is None:
+        emit("run_completed", result="no_task")
+        return RunOutcome(result="no_task", exit_code=0)
+    outcome = process_page(config, bindings, page)
+    emit(
+        "run_completed",
+        result=outcome.result,
+        task_id=outcome.metadata.get("task_id"),
+        failure_code=outcome.failure_code,
+    )
+    return outcome
+
+
+def run_drain_pending(config: Config) -> RunOutcome:
+    prerequisite_outcome = validate_run_prerequisites(config)
+    if prerequisite_outcome is not None:
+        return prerequisite_outcome
+
+    emit("drain_started", database_id=config.notion_database_id)
+    bindings = initialize_notion_bindings(config)
+    counts = {"ok": 0, "blocked": 0, "failed": 0, "total": 0}
+
+    while True:
+        emit_debug("progress", stage="notion_list_pages")
+        pages = run_json_command(
+            notion_command("list-pages", "--database-id", config.notion_database_id)
+        )
+        page = select_todo_page(pages, bindings)
+        if page is None:
+            break
+        outcome = process_page(config, bindings, page)
+        counts["total"] += 1
+        if outcome.result in {"ok", "blocked", "failed"}:
+            counts[outcome.result] += 1
+        emit(
+            "drain_task_completed",
+            task_id=outcome.metadata.get("task_id"),
+            result=outcome.result,
+            failure_code=outcome.failure_code,
+        )
+
+    if counts["total"] == 0:
+        emit("drain_completed", result="no_task", **counts)
+        return RunOutcome(result="no_task", exit_code=0, metadata=counts)
+
+    if counts["failed"] > 0:
+        result = "failed"
+        exit_code = 1
+    elif counts["blocked"] > 0:
+        result = "blocked"
+        exit_code = 1
+    else:
+        result = "ok"
+        exit_code = 0
+    emit("drain_completed", result=result, **counts)
+    return RunOutcome(result=result, exit_code=exit_code, metadata=counts)
 
 
 def run_watch_loop(config: Config, poll_interval_seconds: int) -> RunOutcome:
@@ -1221,14 +1320,22 @@ def install_cron(
     schedule: str = typer.Option(
         "*/5 * * * *", help="Cron schedule expression to print."
     ),
+    drain: bool = typer.Option(
+        False, "--drain", help="Print cron command that drains all pending Todo tasks."
+    ),
 ) -> None:
     """Print a crontab entry for this service without installing it."""
     command = f"cd {ROOT} && {RUN_WITH_ENV_BIN} {AUTO_CODER_BIN} run"
+    if drain:
+        command = f"{command} --drain"
     typer.echo(f"{schedule} {command}")
 
 
 @app.command()
 def run(
+    drain: bool = typer.Option(
+        False, "--drain", help="Process all pending Todo tasks before exiting."
+    ),
     watch: bool = typer.Option(
         False,
         "--watch",
@@ -1242,8 +1349,12 @@ def run(
     ),
 ) -> None:
     """Process one task, or keep polling in watch mode."""
+    if drain and watch:
+        raise typer.BadParameter("--drain cannot be used with --watch")
     observability = load_observability_config(ROOT)
     command = "./bin/auto-coder run"
+    if drain:
+        command = f"{command} --drain"
     if watch:
         command = f"{command} --watch --poll-interval-seconds {poll_interval_seconds}"
     service_run = ServiceRun(
@@ -1254,12 +1365,28 @@ def run(
         log_format=LOG_FORMAT,
     )
     service_run.start()
+    lock_path = resolve_run_lock_path()
     try:
         config = load_config()
-        if watch:
-            outcome = run_watch_loop(config, poll_interval_seconds)
-        else:
-            outcome = run_once(config)
+        with RunLock(lock_path):
+            if drain:
+                outcome = run_drain_pending(config)
+            elif watch:
+                outcome = run_watch_loop(config, poll_interval_seconds)
+            else:
+                outcome = run_once(config)
+    except AlreadyRunningError as exc:
+        emit_warn(
+            "already_running",
+            lock_path=str(lock_path),
+            message=str(exc),
+        )
+        outcome = RunOutcome(
+            result="ok",
+            exit_code=0,
+            failure_code=None,
+            message=str(exc),
+        )
     except KeyboardInterrupt:
         emit("watch_stopped", reason="keyboard_interrupt")
         outcome = RunOutcome(result="ok", exit_code=0)

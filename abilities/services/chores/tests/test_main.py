@@ -26,6 +26,21 @@ from abilities.services import shared_observability as shared  # noqa: E402
 
 
 class ChoresTests(unittest.TestCase):
+    def test_load_config_resolves_state_file_from_robin_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {
+                "ROBIN_HOME": str(Path(tmp) / "robin-home"),
+                "CHORES_STATE_FILE": "state/chores-state.json",
+            },
+            clear=False,
+        ):
+            config = main.load_config()
+        self.assertEqual(
+            config.state_file,
+            (Path(tmp) / "robin-home" / "state" / "chores-state.json").resolve(),
+        )
+
     def test_install_cron_uses_env_wrapper(self) -> None:
         result = CliRunner().invoke(main.app, ["install-cron"])
         self.assertEqual(result.exit_code, 0)

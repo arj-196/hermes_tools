@@ -32,6 +32,25 @@ class AutoCoderTests(unittest.TestCase):
             f"{main.RUN_WITH_ENV_BIN} {main.AUTO_CODER_BIN} run", result.output
         )
 
+    def test_install_cron_drain_flag_appends_drain(self) -> None:
+        result = CliRunner().invoke(main.app, ["install-cron", "--drain"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn(
+            f"{main.RUN_WITH_ENV_BIN} {main.AUTO_CODER_BIN} run --drain",
+            result.output,
+        )
+
+    def test_resolve_run_lock_path_uses_robin_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {"ROBIN_HOME": str(Path(tmp) / "robin-home"), "AUTO_CODER_LOCKS_DIR": "locks"},
+            clear=False,
+        ):
+            path = main.resolve_run_lock_path()
+        self.assertEqual(
+            path, (Path(tmp) / "robin-home" / "locks" / "auto-coder.lock").resolve()
+        )
+
     def config(self) -> main.Config:
         return main.Config(
             notion_database_id="db1",
@@ -447,12 +466,17 @@ class AutoCoderTests(unittest.TestCase):
         ) as run_once_mock, patch.object(
             main, "run_watch_loop"
         ) as run_watch_loop_mock, patch.object(
+            main, "run_drain_pending"
+        ) as run_drain_mock, patch.object(
             main, "ServiceRun", return_value=fake_service_run
+        ), patch.object(
+            main, "RunLock"
         ):
             result = CliRunner().invoke(main.app, ["run"])
         self.assertEqual(result.exit_code, 0)
         run_once_mock.assert_called_once()
         run_watch_loop_mock.assert_not_called()
+        run_drain_mock.assert_not_called()
         fake_service_run.start.assert_called_once()
         fake_service_run.finish.assert_called_once_with(outcome)
 
@@ -462,13 +486,54 @@ class AutoCoderTests(unittest.TestCase):
         with patch.object(main, "load_config", return_value=self.config()), patch.object(
             main, "run_watch_loop", return_value=outcome
         ) as run_watch_loop_mock, patch.object(main, "run_once") as run_once_mock, patch.object(
+            main, "run_drain_pending"
+        ) as run_drain_mock, patch.object(
             main, "ServiceRun", return_value=fake_service_run
+        ), patch.object(
+            main, "RunLock"
         ):
             result = CliRunner().invoke(main.app, ["run", "--watch"])
         self.assertEqual(result.exit_code, 0)
         run_watch_loop_mock.assert_called_once_with(self.config(), 10)
         run_once_mock.assert_not_called()
+        run_drain_mock.assert_not_called()
         fake_service_run.finish.assert_called_once_with(outcome)
+
+    def test_run_command_drain_calls_run_drain_pending(self) -> None:
+        fake_service_run = MagicMock()
+        outcome = main.RunOutcome(result="ok", exit_code=0)
+        with patch.object(main, "load_config", return_value=self.config()), patch.object(
+            main, "run_drain_pending", return_value=outcome
+        ) as run_drain_mock, patch.object(main, "run_once") as run_once_mock, patch.object(
+            main, "run_watch_loop"
+        ) as run_watch_mock, patch.object(
+            main, "ServiceRun", return_value=fake_service_run
+        ), patch.object(
+            main, "RunLock"
+        ):
+            result = CliRunner().invoke(main.app, ["run", "--drain"])
+        self.assertEqual(result.exit_code, 0)
+        run_drain_mock.assert_called_once_with(self.config())
+        run_once_mock.assert_not_called()
+        run_watch_mock.assert_not_called()
+        fake_service_run.finish.assert_called_once_with(outcome)
+
+    def test_run_rejects_drain_and_watch_together(self) -> None:
+        result = CliRunner().invoke(main.app, ["run", "--drain", "--watch"])
+        self.assertNotEqual(result.exit_code, 0)
+
+    def test_run_command_exits_when_already_running(self) -> None:
+        fake_service_run = MagicMock()
+        with patch.object(main, "load_config", return_value=self.config()), patch.object(
+            main, "ServiceRun", return_value=fake_service_run
+        ), patch.object(
+            main, "RunLock", side_effect=main.AlreadyRunningError("locked")
+        ):
+            result = CliRunner().invoke(main.app, ["run"])
+        self.assertEqual(result.exit_code, 0)
+        finish_outcome = fake_service_run.finish.call_args.args[0]
+        self.assertEqual(finish_outcome.exit_code, 0)
+        self.assertIsNone(finish_outcome.failure_code)
 
     def test_run_watch_loop_sleeps_only_after_no_task(self) -> None:
         config = self.config()
@@ -490,7 +555,9 @@ class AutoCoderTests(unittest.TestCase):
         fake_service_run = MagicMock()
         with patch.object(main, "load_config", return_value=self.config()), patch.object(
             main, "run_watch_loop", side_effect=KeyboardInterrupt()
-        ), patch.object(main, "ServiceRun", return_value=fake_service_run):
+        ), patch.object(main, "ServiceRun", return_value=fake_service_run), patch.object(
+            main, "RunLock"
+        ):
             result = CliRunner().invoke(main.app, ["run", "--watch"])
         self.assertEqual(result.exit_code, 0)
         finish_outcome = fake_service_run.finish.call_args.args[0]
@@ -501,6 +568,50 @@ class AutoCoderTests(unittest.TestCase):
             main.app, ["run", "--watch", "--poll-interval-seconds", "0"]
         )
         self.assertNotEqual(result.exit_code, 0)
+
+    def test_run_drain_pending_no_tasks_returns_no_task(self) -> None:
+        config = self.config()
+        bindings = main.discover_schema(self.schema_payload(), config)
+        with patch.object(main, "initialize_notion_bindings", return_value=bindings), patch.object(
+            main, "run_json_command", return_value={"data": {"results": []}}
+        ):
+            outcome = main.run_drain_pending(config)
+        self.assertEqual(outcome.result, "no_task")
+        self.assertEqual(outcome.metadata["total"], 0)
+
+    def test_run_drain_pending_processes_multiple_tasks(self) -> None:
+        config = self.config()
+        bindings = main.discover_schema(self.schema_payload(), config)
+        first = {
+            "id": "task-1",
+            "properties": {"Status": {"type": "status", "status": {"name": "Todo"}}},
+        }
+        second = {
+            "id": "task-2",
+            "properties": {"Status": {"type": "status", "status": {"name": "Todo"}}},
+        }
+        pages_sequence = [
+            {"data": {"results": [first, second]}},
+            {"data": {"results": [second]}},
+            {"data": {"results": []}},
+        ]
+        outcomes = [
+            main.RunOutcome(result="ok", exit_code=0, metadata={"task_id": "task-1"}),
+            main.RunOutcome(
+                result="blocked",
+                exit_code=1,
+                failure_code="test_failure",
+                metadata={"task_id": "task-2"},
+            ),
+        ]
+        with patch.object(main, "initialize_notion_bindings", return_value=bindings), patch.object(
+            main, "run_json_command", side_effect=pages_sequence
+        ), patch.object(main, "process_page", side_effect=outcomes):
+            outcome = main.run_drain_pending(config)
+        self.assertEqual(outcome.result, "blocked")
+        self.assertEqual(outcome.metadata["ok"], 1)
+        self.assertEqual(outcome.metadata["blocked"], 1)
+        self.assertEqual(outcome.metadata["total"], 2)
 
 
 if __name__ == "__main__":

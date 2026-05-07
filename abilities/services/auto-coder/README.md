@@ -12,20 +12,25 @@ one after another.
 ./bin/auto-coder status
 ./bin/auto-coder history
 ./bin/auto-coder run
+./bin/auto-coder run --drain
 ./bin/auto-coder run --watch
 ./bin/auto-coder run --watch --poll-interval-seconds 10
 ./bin/auto-coder install-cron
+./bin/auto-coder install-cron --drain
 ```
 
 - `./bin/auto-coder run` processes at most one task and exits (cron-friendly).
+- `./bin/auto-coder run --drain` processes all pending `Todo` tasks before exiting.
 - `./bin/auto-coder run --watch` keeps running, polling for new Todo tasks.
 - Watch mode sleeps only when no task is available, and continues after blocked/failed tasks.
+- Only one auto-coder instance can run at a time; overlapping runs exit immediately.
 
 ## Required Environment
 
 - `NOTION_API_KEY`: required by `./bin/notion`
 - `NOTION_TASK_DATABASE_ID`: Notion task database
 - `AUTO_CODER_APPS_ROOT`: root directory containing target repositories, defaults to `~/apps`
+- `ROBIN_HOME`: base directory for Robin runtime files, defaults to `.robin` under repo root
 
 Optional field-name configuration:
 
@@ -37,8 +42,9 @@ Optional field-name configuration:
 - `OPENROUTER_API_KEY`, used to generate diff-aware commit messages
 - `AUTO_CODER_COMMIT_MODEL`, defaults to `openrouter/gpt-oss-120b`
 - `AUTO_CODER_COMMIT_MAX_CONTEXT_TOKENS`, defaults to `16000`
-- `ROBIN_RUN_LEDGER_DIR`, defaults to `.robin`
-- `ROBIN_LOG_RUNS_DIR`, defaults to `.robin/logs`
+- `AUTO_CODER_LOCKS_DIR`, defaults to `locks` (relative to `ROBIN_HOME` unless absolute)
+- `ROBIN_RUN_LEDGER_DIR`, defaults to `run-ledger` (relative to `ROBIN_HOME` unless absolute)
+- `ROBIN_LOG_RUNS_DIR`, defaults to `logs` (relative to `ROBIN_HOME` unless absolute)
 - `ROBIN_TELEGRAM_BOT_TOKEN`, optional Telegram bot token for failure alerts
 - `ROBIN_TELEGRAM_CHAT_ID`, optional Telegram chat ID for failure alerts
 - `ROBIN_LOG_LEVEL`, defaults to `info` (`debug|info|warn|error`)
@@ -55,8 +61,8 @@ Optional field-name configuration:
 
 Each cron execution also creates:
 
-- a `run ledger` entry in `.robin/run-ledger.jsonl`
-- a dedicated `run log` file at `.robin/logs/auto-coder/<YYYY-MM-DD>-<run_id>.log`
+- a `run ledger` entry at `<ROBIN_HOME>/<ROBIN_RUN_LEDGER_DIR>/run-ledger.jsonl`
+- a dedicated `run log` file at `<ROBIN_HOME>/<ROBIN_LOG_RUNS_DIR>/auto-coder/<YYYY-MM-DD>-<run_id>.log`
 
 Use `./bin/auto-coder history --limit 10` to inspect recent finished runs.
 Add `--show-log` to print the stored log contents for those runs.

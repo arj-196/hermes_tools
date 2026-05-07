@@ -15,8 +15,9 @@ import typer
 from loguru import logger
 
 DEFAULT_RETENTION_DAYS = 30
-DEFAULT_RUN_LEDGER_DIR = ".robin"
-DEFAULT_LOG_RUNS_DIR = ".robin/logs"
+DEFAULT_ROBIN_HOME = ".robin"
+DEFAULT_RUN_LEDGER_DIR = "run-ledger"
+DEFAULT_LOG_RUNS_DIR = "logs"
 RUN_LEDGER_FILENAME = "run-ledger.jsonl"
 
 
@@ -182,23 +183,34 @@ def resolve_log_level() -> str:
     }.get(configured, "INFO")
 
 
-def expand_observability_path(root: Path, value: str) -> Path:
-    expanded = Path(os.path.expandvars(os.path.expanduser(value)))
+def resolve_robin_home(root: Path) -> Path:
+    configured = os.getenv("ROBIN_HOME", DEFAULT_ROBIN_HOME).strip() or DEFAULT_ROBIN_HOME
+    expanded = Path(os.path.expandvars(os.path.expanduser(configured)))
     if not expanded.is_absolute():
         expanded = root / expanded
     return expanded.resolve()
 
 
+def expand_observability_path(root: Path, robin_home: Path, value: str) -> Path:
+    expanded = Path(os.path.expandvars(os.path.expanduser(value)))
+    if not expanded.is_absolute():
+        expanded = robin_home / expanded
+    return expanded.resolve()
+
+
 def load_observability_config(root: Path) -> ObservabilityConfig:
+    robin_home = resolve_robin_home(root)
     return ObservabilityConfig(
         root=root,
         ledger_dir=expand_observability_path(
             root,
+            robin_home,
             os.getenv("ROBIN_RUN_LEDGER_DIR", DEFAULT_RUN_LEDGER_DIR).strip()
             or DEFAULT_RUN_LEDGER_DIR,
         ),
         logs_dir=expand_observability_path(
             root,
+            robin_home,
             os.getenv("ROBIN_LOG_RUNS_DIR", DEFAULT_LOG_RUNS_DIR).strip()
             or DEFAULT_LOG_RUNS_DIR,
         ),
