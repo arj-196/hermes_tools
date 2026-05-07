@@ -3,6 +3,8 @@
 The auto-coder service is a single-run worker intended to be called by cron.
 Each run claims at most one Notion task, delegates repository edits to Codex,
 and completes the git workflow when Codex reports successful verification.
+For local long-running usage, watch mode can continuously poll and process tasks
+one after another.
 
 ## Commands
 
@@ -10,8 +12,14 @@ and completes the git workflow when Codex reports successful verification.
 ./bin/auto-coder status
 ./bin/auto-coder history
 ./bin/auto-coder run
+./bin/auto-coder run --watch
+./bin/auto-coder run --watch --poll-interval-seconds 10
 ./bin/auto-coder install-cron
 ```
+
+- `./bin/auto-coder run` processes at most one task and exits (cron-friendly).
+- `./bin/auto-coder run --watch` keeps running, polling for new Todo tasks.
+- Watch mode sleeps only when no task is available, and continues after blocked/failed tasks.
 
 ## Required Environment
 

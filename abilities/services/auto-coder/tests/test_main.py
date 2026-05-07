@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
@@ -26,7 +26,7 @@ class AutoCoderTests(unittest.TestCase):
     def test_install_cron_uses_env_wrapper(self) -> None:
         result = CliRunner().invoke(main.app, ["install-cron"])
         self.assertEqual(result.exit_code, 0)
-        self.assertIn("*/15 * * * *", result.output)
+        self.assertIn("*/5 * * * *", result.output)
         self.assertIn(f"cd {main.ROOT} &&", result.output)
         self.assertIn(
             f"{main.RUN_WITH_ENV_BIN} {main.AUTO_CODER_BIN} run", result.output
@@ -415,6 +415,69 @@ class AutoCoderTests(unittest.TestCase):
         self.assertEqual(commit_call.args[1], "commit")
         self.assertEqual(commit_call.args[2], "-m")
         self.assertIn("feat: update parser", commit_call.args[3])
+
+    def test_run_command_single_calls_run_once_once(self) -> None:
+        fake_service_run = MagicMock()
+        outcome = main.RunOutcome(result="no_task", exit_code=0)
+        with patch.object(main, "load_config", return_value=self.config()), patch.object(
+            main, "run_once", return_value=outcome
+        ) as run_once_mock, patch.object(
+            main, "run_watch_loop"
+        ) as run_watch_loop_mock, patch.object(
+            main, "ServiceRun", return_value=fake_service_run
+        ):
+            result = CliRunner().invoke(main.app, ["run"])
+        self.assertEqual(result.exit_code, 0)
+        run_once_mock.assert_called_once()
+        run_watch_loop_mock.assert_not_called()
+        fake_service_run.start.assert_called_once()
+        fake_service_run.finish.assert_called_once_with(outcome)
+
+    def test_run_command_watch_calls_watch_loop(self) -> None:
+        fake_service_run = MagicMock()
+        outcome = main.RunOutcome(result="ok", exit_code=0)
+        with patch.object(main, "load_config", return_value=self.config()), patch.object(
+            main, "run_watch_loop", return_value=outcome
+        ) as run_watch_loop_mock, patch.object(main, "run_once") as run_once_mock, patch.object(
+            main, "ServiceRun", return_value=fake_service_run
+        ):
+            result = CliRunner().invoke(main.app, ["run", "--watch"])
+        self.assertEqual(result.exit_code, 0)
+        run_watch_loop_mock.assert_called_once_with(self.config(), 10)
+        run_once_mock.assert_not_called()
+        fake_service_run.finish.assert_called_once_with(outcome)
+
+    def test_run_watch_loop_sleeps_only_after_no_task(self) -> None:
+        config = self.config()
+        outcomes = [
+            main.RunOutcome(result="no_task", exit_code=0),
+            main.RunOutcome(result="ok", exit_code=0),
+            main.RunOutcome(result="blocked", exit_code=1),
+            main.RunOutcome(result="failed", exit_code=1),
+            KeyboardInterrupt(),
+        ]
+        with patch.object(main, "run_once", side_effect=outcomes), patch.object(
+            main.time, "sleep"
+        ) as sleep_mock:
+            with self.assertRaises(KeyboardInterrupt):
+                main.run_watch_loop(config, 10)
+        sleep_mock.assert_called_once_with(10)
+
+    def test_run_watch_cli_keyboard_interrupt_exits_zero(self) -> None:
+        fake_service_run = MagicMock()
+        with patch.object(main, "load_config", return_value=self.config()), patch.object(
+            main, "run_watch_loop", side_effect=KeyboardInterrupt()
+        ), patch.object(main, "ServiceRun", return_value=fake_service_run):
+            result = CliRunner().invoke(main.app, ["run", "--watch"])
+        self.assertEqual(result.exit_code, 0)
+        finish_outcome = fake_service_run.finish.call_args.args[0]
+        self.assertEqual(finish_outcome.exit_code, 0)
+
+    def test_run_watch_rejects_invalid_poll_interval(self) -> None:
+        result = CliRunner().invoke(
+            main.app, ["run", "--watch", "--poll-interval-seconds", "0"]
+        )
+        self.assertNotEqual(result.exit_code, 0)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -1152,6 +1153,26 @@ def run_once(config: Config) -> RunOutcome:
         )
 
 
+def run_watch_loop(config: Config, poll_interval_seconds: int) -> RunOutcome:
+    emit(
+        "watch_started",
+        poll_interval_seconds=poll_interval_seconds,
+        database_id=config.notion_database_id,
+    )
+    while True:
+        outcome = run_once(config)
+        if outcome.result == "no_task":
+            emit(
+                "watch_idle_wait",
+                poll_interval_seconds=poll_interval_seconds,
+            )
+            time.sleep(poll_interval_seconds)
+            continue
+        if outcome.result in {"ok", "blocked", "failed"}:
+            continue
+        emit_warn("watch_unknown_outcome", result=outcome.result)
+
+
 def build_status_payload(config: Config) -> dict[str, Any]:
     observability = load_observability_config(ROOT)
     last_run = get_latest_run(observability, SERVICE_NAME)
@@ -1207,19 +1228,41 @@ def install_cron(
 
 
 @app.command()
-def run() -> None:
-    """Process at most one Notion task."""
+def run(
+    watch: bool = typer.Option(
+        False,
+        "--watch",
+        help="Keep running and poll for new tasks instead of exiting after one run.",
+    ),
+    poll_interval_seconds: int = typer.Option(
+        10,
+        "--poll-interval-seconds",
+        min=1,
+        help="Seconds to wait before polling again when no Todo task is available.",
+    ),
+) -> None:
+    """Process one task, or keep polling in watch mode."""
     observability = load_observability_config(ROOT)
+    command = "./bin/auto-coder run"
+    if watch:
+        command = f"{command} --watch --poll-interval-seconds {poll_interval_seconds}"
     service_run = ServiceRun(
         observability,
         service=SERVICE_NAME,
-        command="./bin/auto-coder run",
+        command=command,
         log_level=resolve_log_level(),
         log_format=LOG_FORMAT,
     )
     service_run.start()
     try:
-        outcome = run_once(load_config())
+        config = load_config()
+        if watch:
+            outcome = run_watch_loop(config, poll_interval_seconds)
+        else:
+            outcome = run_once(config)
+    except KeyboardInterrupt:
+        emit("watch_stopped", reason="keyboard_interrupt")
+        outcome = RunOutcome(result="ok", exit_code=0)
     except Exception as exc:  # noqa: BLE001 - final run failure must be recorded.
         emit_error(
             "run_failed",
