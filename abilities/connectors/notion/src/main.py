@@ -10,7 +10,9 @@ import typer
 NOTION_VERSION = "2022-06-28"
 NOTION_BASE_URL = "https://api.notion.com/v1"
 
-app = typer.Typer(help="Direct CLI for the Robin Notion connector.", no_args_is_help=True)
+app = typer.Typer(
+    help="Direct CLI for the Robin Notion connector.", no_args_is_help=True
+)
 
 
 class NotionAPIError(Exception):
@@ -48,7 +50,9 @@ def build_status_payload() -> dict[str, object]:
     }
 
 
-def build_error(action: str, code: str, message: str, status: int = 400) -> dict[str, Any]:
+def build_error(
+    action: str, code: str, message: str, status: int = 400
+) -> dict[str, Any]:
     return {
         "ok": False,
         "action": action,
@@ -93,7 +97,9 @@ def notion_request(
             message=str(parsed.get("message") or raw or "Notion API request failed"),
         ) from exc
     except error.URLError as exc:
-        raise NotionAPIError(status=503, code="network_error", message=str(exc.reason)) from exc
+        raise NotionAPIError(
+            status=503, code="network_error", message=str(exc.reason)
+        ) from exc
 
 
 def extract_page_title(page: dict[str, Any]) -> str:
@@ -103,10 +109,13 @@ def extract_page_title(page: dict[str, Any]) -> str:
             fragments = prop.get("title", [])
             if isinstance(fragments, list):
                 title = "".join(
-                    frag.get("plain_text", "") for frag in fragments if isinstance(frag, dict)
+                    frag.get("plain_text", "")
+                    for frag in fragments
+                    if isinstance(frag, dict)
                 )
             break
     return title
+
 
 def require_token(action: str) -> str:
     token = os.getenv("NOTION_API_KEY", "").strip()
@@ -137,10 +146,14 @@ def list_pages(
     if start_cursor is not None:
         request_payload["start_cursor"] = start_cursor
 
-    api_response = notion_request("POST", f"/databases/{database_id}/query", token, request_payload)
+    api_response = notion_request(
+        "POST", f"/databases/{database_id}/query", token, request_payload
+    )
     results = api_response.get("results", [])
     if not isinstance(results, list):
-        raise NotionAPIError(status=502, code="invalid_response", message="Notion returned invalid list")
+        raise NotionAPIError(
+            status=502, code="invalid_response", message="Notion returned invalid list"
+        )
 
     return {
         "ok": True,
@@ -184,11 +197,15 @@ def list_block_children(token: str, block_id: str) -> list[dict[str, Any]]:
     return all_results
 
 
-def expand_blocks_recursive(token: str, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def expand_blocks_recursive(
+    token: str, blocks: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     expanded: list[dict[str, Any]] = []
     for block in blocks:
         block_copy = dict(block)
-        if bool(block_copy.get("has_children")) and isinstance(block_copy.get("id"), str):
+        if bool(block_copy.get("has_children")) and isinstance(
+            block_copy.get("id"), str
+        ):
             children = list_block_children(token, block_copy["id"])
             block_copy["children"] = expand_blocks_recursive(token, children)
         expanded.append(block_copy)
@@ -227,7 +244,11 @@ def normalize_database_property(name: str, prop: dict[str, Any]) -> dict[str, An
 
     if isinstance(prop_type, str) and prop_type in {"status", "select", "multi_select"}:
         option_container = prop.get(prop_type, {})
-        options = option_container.get("options", []) if isinstance(option_container, dict) else []
+        options = (
+            option_container.get("options", [])
+            if isinstance(option_container, dict)
+            else []
+        )
         normalized_options: list[dict[str, Any]] = []
         if isinstance(options, list):
             for option in options:
@@ -349,7 +370,9 @@ def build_option_property_value(
                 "'--text' is not allowed when '--property-type multi_select' is used",
             )
         if not clean_value_ids:
-            raise InvalidRequestError(action, "'multi_select' requires at least one '--value-id'")
+            raise InvalidRequestError(
+                action, "'multi_select' requires at least one '--value-id'"
+            )
         return {"multi_select": [{"id": value_id} for value_id in clean_value_ids]}
 
     if normalized_type in {"rich_text", "text"}:
@@ -405,7 +428,9 @@ def emit_human_list(payload: dict[str, Any]) -> None:
 
 def emit_human_update(payload: dict[str, Any]) -> None:
     data = payload["data"]
-    typer.echo(f"Updated property {data['updated_property']['property_id']} on page {data['page_id']}")
+    typer.echo(
+        f"Updated property {data['updated_property']['property_id']} on page {data['page_id']}"
+    )
     typer.echo(f"Last edited: {data['last_edited_time']}")
 
 
@@ -445,7 +470,9 @@ def extract_rich_text_plain_text(rich_text: Any) -> str:
     return "".join(fragments)
 
 
-def render_blocks(blocks: list[dict[str, Any]], indent: int = 0, numbered_index: int = 1) -> list[str]:
+def render_blocks(
+    blocks: list[dict[str, Any]], indent: int = 0, numbered_index: int = 1
+) -> list[str]:
     lines: list[str] = []
     current_number = numbered_index
 
@@ -463,34 +490,56 @@ def render_blocks(blocks: list[dict[str, Any]], indent: int = 0, numbered_index:
         block_lines: list[str] = []
         if block_type == "paragraph":
             text = extract_rich_text_plain_text(content.get("rich_text"))
-            block_lines.append(f"{line_prefix}{text}" if text else f"{line_prefix}[empty:paragraph]")
+            block_lines.append(
+                f"{line_prefix}{text}" if text else f"{line_prefix}[empty:paragraph]"
+            )
         elif block_type == "heading_1":
             text = extract_rich_text_plain_text(content.get("rich_text"))
-            block_lines.append(f"{line_prefix}# {text}" if text else f"{line_prefix}# [empty]")
+            block_lines.append(
+                f"{line_prefix}# {text}" if text else f"{line_prefix}# [empty]"
+            )
         elif block_type == "heading_2":
             text = extract_rich_text_plain_text(content.get("rich_text"))
-            block_lines.append(f"{line_prefix}## {text}" if text else f"{line_prefix}## [empty]")
+            block_lines.append(
+                f"{line_prefix}## {text}" if text else f"{line_prefix}## [empty]"
+            )
         elif block_type == "heading_3":
             text = extract_rich_text_plain_text(content.get("rich_text"))
-            block_lines.append(f"{line_prefix}### {text}" if text else f"{line_prefix}### [empty]")
+            block_lines.append(
+                f"{line_prefix}### {text}" if text else f"{line_prefix}### [empty]"
+            )
         elif block_type == "bulleted_list_item":
             text = extract_rich_text_plain_text(content.get("rich_text"))
-            block_lines.append(f"{line_prefix}- {text}" if text else f"{line_prefix}- [empty]")
+            block_lines.append(
+                f"{line_prefix}- {text}" if text else f"{line_prefix}- [empty]"
+            )
         elif block_type == "numbered_list_item":
             text = extract_rich_text_plain_text(content.get("rich_text"))
-            block_lines.append(f"{line_prefix}{current_number}. {text}" if text else f"{line_prefix}{current_number}. [empty]")
+            block_lines.append(
+                f"{line_prefix}{current_number}. {text}"
+                if text
+                else f"{line_prefix}{current_number}. [empty]"
+            )
             current_number += 1
         elif block_type == "to_do":
             text = extract_rich_text_plain_text(content.get("rich_text"))
             checked = bool(content.get("checked"))
             marker = "[x]" if checked else "[ ]"
-            block_lines.append(f"{line_prefix}{marker} {text}" if text else f"{line_prefix}{marker} [empty]")
+            block_lines.append(
+                f"{line_prefix}{marker} {text}"
+                if text
+                else f"{line_prefix}{marker} [empty]"
+            )
         elif block_type == "toggle":
             text = extract_rich_text_plain_text(content.get("rich_text"))
-            block_lines.append(f"{line_prefix}> {text}" if text else f"{line_prefix}> [empty]")
+            block_lines.append(
+                f"{line_prefix}> {text}" if text else f"{line_prefix}> [empty]"
+            )
         elif block_type == "quote":
             text = extract_rich_text_plain_text(content.get("rich_text"))
-            block_lines.append(f"{line_prefix}> {text}" if text else f"{line_prefix}> [empty]")
+            block_lines.append(
+                f"{line_prefix}> {text}" if text else f"{line_prefix}> [empty]"
+            )
         elif block_type == "code":
             text = extract_rich_text_plain_text(content.get("rich_text"))
             language = content.get("language")
@@ -509,7 +558,11 @@ def render_blocks(blocks: list[dict[str, Any]], indent: int = 0, numbered_index:
             if isinstance(icon, dict):
                 if icon.get("type") == "emoji" and isinstance(icon.get("emoji"), str):
                     icon_text = icon["emoji"]
-            block_lines.append(f"{line_prefix}{icon_text} {text}" if text else f"{line_prefix}{icon_text} [empty]")
+            block_lines.append(
+                f"{line_prefix}{icon_text} {text}"
+                if text
+                else f"{line_prefix}{icon_text} [empty]"
+            )
         elif block_type == "divider":
             block_lines.append(f"{line_prefix}{'-' * 24}")
         else:
@@ -551,12 +604,16 @@ def exit_with_error(action: str, exc: Exception, json_output: bool) -> None:
     if json_output:
         emit_json(payload)
     else:
-        typer.echo(f"{payload['error']['code']}: {payload['error']['message']}", err=True)
+        typer.echo(
+            f"{payload['error']['code']}: {payload['error']['message']}", err=True
+        )
     raise typer.Exit(code=1)
 
 
 @app.command("status")
-def status(json_output: bool = typer.Option(False, "--json", help="Emit structured JSON.")) -> None:
+def status(
+    json_output: bool = typer.Option(False, "--json", help="Emit structured JSON.")
+) -> None:
     payload = build_status_payload()
     if json_output:
         emit_json(payload)
@@ -566,9 +623,15 @@ def status(json_output: bool = typer.Option(False, "--json", help="Emit structur
 
 @app.command("list-pages")
 def list_pages_command(
-    database_id: str = typer.Option(..., "--database-id", help="Target Notion database ID."),
-    page_size: int | None = typer.Option(None, "--page-size", help="Limit the number of results."),
-    start_cursor: str | None = typer.Option(None, "--start-cursor", help="Pagination cursor."),
+    database_id: str = typer.Option(
+        ..., "--database-id", help="Target Notion database ID."
+    ),
+    page_size: int | None = typer.Option(
+        None, "--page-size", help="Limit the number of results."
+    ),
+    start_cursor: str | None = typer.Option(
+        None, "--start-cursor", help="Pagination cursor."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit structured JSON."),
 ) -> None:
     try:
@@ -608,7 +671,9 @@ def get_page_content_command(
 
 @app.command("get-database-properties")
 def get_database_properties_command(
-    database_id: str = typer.Option(..., "--database-id", help="Target Notion database ID."),
+    database_id: str = typer.Option(
+        ..., "--database-id", help="Target Notion database ID."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit structured JSON."),
 ) -> None:
     try:
@@ -628,14 +693,20 @@ def get_database_properties_command(
 @app.command("update-page-property")
 def update_page_property_command(
     page_id: str = typer.Option(..., "--page-id", help="Target page ID."),
-    property_id: str = typer.Option(..., "--property-id", help="Property ID to update."),
+    property_id: str = typer.Option(
+        ..., "--property-id", help="Property ID to update."
+    ),
     property_type: str = typer.Option(
         ...,
         "--property-type",
         help="Property type: status, select, multi_select, rich_text, or text.",
     ),
-    value_ids: list[str] = typer.Option([], "--value-id", help="Option ID value. Repeat for multi_select."),
-    text: str | None = typer.Option(None, "--text", help="Text content for rich_text/text properties."),
+    value_ids: list[str] = typer.Option(
+        [], "--value-id", help="Option ID value. Repeat for multi_select."
+    ),
+    text: str | None = typer.Option(
+        None, "--text", help="Text content for rich_text/text properties."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit structured JSON."),
 ) -> None:
     action = "update_page_property"

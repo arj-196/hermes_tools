@@ -1,16 +1,15 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import io
 import json
 import os
-import contextlib
+import sys
 import tempfile
 import unittest
-import sys
 from pathlib import Path
 from unittest.mock import patch
-
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "src" / "main.py"
 SPEC = importlib.util.spec_from_file_location("auto_coder_main", MODULE_PATH)
@@ -51,8 +50,18 @@ class AutoCoderTests(unittest.TestCase):
                             {"id": "blocked-id", "name": "Blocked"},
                         ],
                     },
-                    {"name": "Project", "property_id": "project-id", "type": "select", "options": []},
-                    {"name": "Error Log", "property_id": "error-log-id", "type": "rich_text", "options": []},
+                    {
+                        "name": "Project",
+                        "property_id": "project-id",
+                        "type": "select",
+                        "options": [],
+                    },
+                    {
+                        "name": "Error Log",
+                        "property_id": "error-log-id",
+                        "type": "rich_text",
+                        "options": [],
+                    },
                 ]
             }
         }
@@ -69,11 +78,15 @@ class AutoCoderTests(unittest.TestCase):
                 "results": [
                     {
                         "id": "done",
-                        "properties": {"Status": {"type": "status", "status": {"name": "Done"}}},
+                        "properties": {
+                            "Status": {"type": "status", "status": {"name": "Done"}}
+                        },
                     },
                     {
                         "id": "todo",
-                        "properties": {"Status": {"type": "status", "status": {"name": "Todo"}}},
+                        "properties": {
+                            "Status": {"type": "status", "status": {"name": "Todo"}}
+                        },
                     },
                 ]
             }
@@ -86,8 +99,14 @@ class AutoCoderTests(unittest.TestCase):
         payload = {
             "data": {
                 "blocks": [
-                    {"type": "heading_1", "heading_1": {"rich_text": [{"plain_text": "Task"}]}},
-                    {"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "Build it"}]}},
+                    {
+                        "type": "heading_1",
+                        "heading_1": {"rich_text": [{"plain_text": "Task"}]},
+                    },
+                    {
+                        "type": "paragraph",
+                        "paragraph": {"rich_text": [{"plain_text": "Build it"}]},
+                    },
                 ]
             }
         }
@@ -99,14 +118,28 @@ class AutoCoderTests(unittest.TestCase):
         payload = {
             "data": {
                 "blocks": [
-                    {"type": "heading_1", "heading_1": {"rich_text": [{"plain_text": "Task"}]}},
-                    {"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "Build it"}]}},
+                    {
+                        "type": "heading_1",
+                        "heading_1": {"rich_text": [{"plain_text": "Task"}]},
+                    },
+                    {
+                        "type": "paragraph",
+                        "paragraph": {"rich_text": [{"plain_text": "Build it"}]},
+                    },
                     {
                         "type": "heading_2",
-                        "heading_2": {"rich_text": [{"plain_text": "Acceptance Criteria"}]},
+                        "heading_2": {
+                            "rich_text": [{"plain_text": "Acceptance Criteria"}]
+                        },
                     },
-                    {"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "Works"}]}},
-                    {"type": "heading_2", "heading_2": {"rich_text": [{"plain_text": "Verification"}]}},
+                    {
+                        "type": "paragraph",
+                        "paragraph": {"rich_text": [{"plain_text": "Works"}]},
+                    },
+                    {
+                        "type": "heading_2",
+                        "heading_2": {"rich_text": [{"plain_text": "Verification"}]},
+                    },
                     {"type": "code", "code": {"rich_text": [{"plain_text": "pytest"}]}},
                 ]
             }
@@ -187,7 +220,9 @@ class AutoCoderTests(unittest.TestCase):
 
     def test_emit_debug_visible_with_env_level(self) -> None:
         out = io.StringIO()
-        with contextlib.redirect_stdout(out), patch.dict(os.environ, {"ROBIN_LOG_LEVEL": "debug"}, clear=False):
+        with contextlib.redirect_stdout(out), patch.dict(
+            os.environ, {"ROBIN_LOG_LEVEL": "debug"}, clear=False
+        ):
             main.configure_logger()
             main.emit_debug("progress", stage="repo_validate")
         line = out.getvalue().strip()
@@ -197,7 +232,9 @@ class AutoCoderTests(unittest.TestCase):
 
     def test_warn_level_suppresses_info(self) -> None:
         out = io.StringIO()
-        with contextlib.redirect_stdout(out), patch.dict(os.environ, {"ROBIN_LOG_LEVEL": "warn"}, clear=False):
+        with contextlib.redirect_stdout(out), patch.dict(
+            os.environ, {"ROBIN_LOG_LEVEL": "warn"}, clear=False
+        ):
             main.configure_logger()
             main.emit("run_started", database_id="db1")
         self.assertEqual(out.getvalue(), "")
@@ -213,7 +250,9 @@ class AutoCoderTests(unittest.TestCase):
     def test_error_routes_to_stderr(self) -> None:
         out = io.StringIO()
         err = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), patch.dict(os.environ, {}, clear=True):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(
+            err
+        ), patch.dict(os.environ, {}, clear=True):
             main.configure_logger()
             main.emit_error("run_failed", message="boom")
         self.assertEqual(out.getvalue(), "")
@@ -260,13 +299,19 @@ class AutoCoderTests(unittest.TestCase):
         self.assertLessEqual(len(payload), 2100)
         self.assertIn("truncated", payload)
 
-    def test_generate_commit_message_falls_back_when_openrouter_response_invalid(self) -> None:
+    def test_generate_commit_message_falls_back_when_openrouter_response_invalid(
+        self,
+    ) -> None:
         config = self.config()
         repo = Path("/tmp/apps/sample")
         responses = [
             main.subprocess.CompletedProcess(["git"], 0, "src/main.py\n", ""),
-            main.subprocess.CompletedProcess(["git"], 0, "1 file changed, 2 insertions(+)\n", ""),
-            main.subprocess.CompletedProcess(["git"], 0, "diff --git a/src/main.py b/src/main.py\n+x\n", ""),
+            main.subprocess.CompletedProcess(
+                ["git"], 0, "1 file changed, 2 insertions(+)\n", ""
+            ),
+            main.subprocess.CompletedProcess(
+                ["git"], 0, "diff --git a/src/main.py b/src/main.py\n+x\n", ""
+            ),
         ]
 
         class FakeResponse:
@@ -282,7 +327,9 @@ class AutoCoderTests(unittest.TestCase):
         with patch.object(main, "git", side_effect=responses), patch.object(
             main.urllib.request, "urlopen", return_value=FakeResponse()
         ):
-            message = main.generate_commit_message_with_openrouter(repo, config, "task-1", "Add behavior")
+            message = main.generate_commit_message_with_openrouter(
+                repo, config, "task-1", "Add behavior"
+            )
         self.assertTrue(message.startswith("feat:"))
         self.assertIn("Notion task: task-1", message)
 
@@ -302,7 +349,9 @@ class AutoCoderTests(unittest.TestCase):
             "generate_commit_message_with_openrouter",
             return_value="feat: update parser\n\n- improve coverage\n\nNotion task: task-1",
         ):
-            main.complete_git_workflow(repo, config, "task-1", "Update parser", "robin/task-1-update-parser")
+            main.complete_git_workflow(
+                repo, config, "task-1", "Update parser", "robin/task-1-update-parser"
+            )
         commit_call = git_mock.call_args_list[2]
         self.assertEqual(commit_call.args[1], "commit")
         self.assertEqual(commit_call.args[2], "-m")

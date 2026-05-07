@@ -17,7 +17,9 @@ from typing import Any
 import typer
 from loguru import logger
 
-app = typer.Typer(help="Cron-friendly autonomous coding service for Robin.", no_args_is_help=True)
+app = typer.Typer(
+    help="Cron-friendly autonomous coding service for Robin.", no_args_is_help=True
+)
 
 STATUS_TO_DO = "Todo"
 STATUS_IN_PROGRESS = "In Progress"
@@ -83,8 +85,12 @@ class AutoCoderError(Exception):
 
 
 class CommandError(RuntimeError):
-    def __init__(self, command: list[str], returncode: int, stdout: str, stderr: str) -> None:
-        super().__init__(stderr or stdout or f"Command failed with exit code {returncode}")
+    def __init__(
+        self, command: list[str], returncode: int, stdout: str, stderr: str
+    ) -> None:
+        super().__init__(
+            stderr or stdout or f"Command failed with exit code {returncode}"
+        )
         self.command = command
         self.returncode = returncode
         self.stdout = stdout
@@ -129,7 +135,12 @@ def emit_warn(event: str, **fields: Any) -> None:
 
 
 def format_time_utc() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def format_value(value: Any) -> str:
@@ -147,7 +158,9 @@ def format_message(fields: dict[str, Any]) -> str:
 
 
 def configure_logger() -> None:
-    configured = LEVEL_MAP.get(os.getenv("ROBIN_LOG_LEVEL", "info").strip().lower(), "INFO")
+    configured = LEVEL_MAP.get(
+        os.getenv("ROBIN_LOG_LEVEL", "info").strip().lower(), "INFO"
+    )
     logger.remove()
     logger.add(
         sys.stdout,
@@ -184,9 +197,14 @@ def load_config() -> Config:
     return Config(
         notion_database_id=os.getenv("NOTION_TASK_DATABASE_ID", "").strip(),
         apps_root=expand_path(os.getenv("APPS_ROOT", "~/apps")),
-        status_property=os.getenv("AUTO_CODER_STATUS_PROPERTY", "Status").strip() or "Status",
-        project_property=os.getenv("AUTO_CODER_PROJECT_PROPERTY", "Project").strip() or "Project",
-        error_log_property=os.getenv("AUTO_CODER_ERROR_LOG_PROPERTY", "Error Log").strip() or "Error Log",
+        status_property=os.getenv("AUTO_CODER_STATUS_PROPERTY", "Status").strip()
+        or "Status",
+        project_property=os.getenv("AUTO_CODER_PROJECT_PROPERTY", "Project").strip()
+        or "Project",
+        error_log_property=os.getenv(
+            "AUTO_CODER_ERROR_LOG_PROPERTY", "Error Log"
+        ).strip()
+        or "Error Log",
         codex_model=os.getenv("AUTO_CODER_CODEX_MODEL", "gpt-5.3-codex").strip()
         or "gpt-5.3-codex",
         git_completion_mode=os.getenv(
@@ -194,11 +212,16 @@ def load_config() -> Config:
         ).strip()
         or "auto_merge_main",
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
-        commit_model=os.getenv("AUTO_CODER_COMMIT_MODEL", "openrouter/gpt-oss-120b").strip()
+        commit_model=os.getenv(
+            "AUTO_CODER_COMMIT_MODEL", "openrouter/gpt-oss-120b"
+        ).strip()
         or "openrouter/gpt-oss-120b",
         commit_max_context_tokens=max(
             1024,
-            int(os.getenv("AUTO_CODER_COMMIT_MAX_CONTEXT_TOKENS", "16000").strip() or "16000"),
+            int(
+                os.getenv("AUTO_CODER_COMMIT_MAX_CONTEXT_TOKENS", "16000").strip()
+                or "16000"
+            ),
         ),
     )
 
@@ -283,17 +306,25 @@ def run_json_command(command: list[str], cwd: Path | None = None) -> dict[str, A
     try:
         result = run_command(command, cwd=cwd)
     except CommandError as exc:
-        raise AutoCoderError("notion_update_failure", format_command_error(exc)) from exc
+        raise AutoCoderError(
+            "notion_update_failure", format_command_error(exc)
+        ) from exc
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise AutoCoderError("notion_update_failure", f"Invalid JSON from command: {command}") from exc
+        raise AutoCoderError(
+            "notion_update_failure", f"Invalid JSON from command: {command}"
+        ) from exc
     if not isinstance(payload, dict):
-        raise AutoCoderError("notion_update_failure", f"Unexpected JSON payload from command: {command}")
+        raise AutoCoderError(
+            "notion_update_failure", f"Unexpected JSON payload from command: {command}"
+        )
     if payload.get("ok") is False:
         error = payload.get("error", {})
         message = error.get("message") if isinstance(error, dict) else None
-        raise AutoCoderError("notion_update_failure", str(message or "Notion command failed"))
+        raise AutoCoderError(
+            "notion_update_failure", str(message or "Notion command failed")
+        )
     return payload
 
 
@@ -301,14 +332,22 @@ def notion_command(*args: str) -> list[str]:
     return [str(NOTION_BIN), *args, "--json"]
 
 
-def discover_schema(properties_payload: dict[str, Any], config: Config) -> SchemaBindings:
+def discover_schema(
+    properties_payload: dict[str, Any], config: Config
+) -> SchemaBindings:
     data = properties_payload.get("data", {})
     properties = data.get("editable_properties", []) if isinstance(data, dict) else []
     if not isinstance(properties, list):
-        raise AutoCoderError("insufficient_spec", "Notion database properties are not readable")
+        raise AutoCoderError(
+            "insufficient_spec", "Notion database properties are not readable"
+        )
 
     by_name = {item.get("name"): item for item in properties if isinstance(item, dict)}
-    status = bind_property(by_name, config.status_property, [STATUS_TO_DO, STATUS_IN_PROGRESS, STATUS_DONE, STATUS_BLOCKED])
+    status = bind_property(
+        by_name,
+        config.status_property,
+        [STATUS_TO_DO, STATUS_IN_PROGRESS, STATUS_DONE, STATUS_BLOCKED],
+    )
     project = bind_property(by_name, config.project_property, [])
     error_log = bind_text_property(by_name, config.error_log_property)
     return SchemaBindings(status=status, project=project, error_log=error_log)
@@ -325,7 +364,9 @@ def bind_property(
     property_id = prop.get("property_id")
     property_type = prop.get("type")
     if not isinstance(property_id, str) or not isinstance(property_type, str):
-        raise AutoCoderError("insufficient_spec", f"Invalid Notion property metadata: {name}")
+        raise AutoCoderError(
+            "insufficient_spec", f"Invalid Notion property metadata: {name}"
+        )
 
     options: dict[str, str] = {}
     raw_options = prop.get("options", [])
@@ -363,7 +404,9 @@ def bind_text_property(
     property_id = prop.get("property_id")
     property_type = prop.get("type")
     if not isinstance(property_id, str) or not isinstance(property_type, str):
-        raise AutoCoderError("insufficient_spec", f"Invalid Notion property metadata: {name}")
+        raise AutoCoderError(
+            "insufficient_spec", f"Invalid Notion property metadata: {name}"
+        )
     if property_type not in {"rich_text", "text"}:
         raise AutoCoderError(
             "insufficient_spec",
@@ -377,7 +420,9 @@ def bind_text_property(
     )
 
 
-def update_option_property(page_id: str, binding: PropertyBinding, option_id: str) -> None:
+def update_option_property(
+    page_id: str, binding: PropertyBinding, option_id: str
+) -> None:
     run_json_command(
         notion_command(
             "update-page-property",
@@ -393,7 +438,9 @@ def update_option_property(page_id: str, binding: PropertyBinding, option_id: st
     )
 
 
-def update_text_property(page_id: str, binding: PropertyBinding, text_value: str) -> None:
+def update_text_property(
+    page_id: str, binding: PropertyBinding, text_value: str
+) -> None:
     run_json_command(
         notion_command(
             "update-page-property",
@@ -410,14 +457,18 @@ def update_text_property(page_id: str, binding: PropertyBinding, text_value: str
 
 
 def set_status(page_id: str, bindings: SchemaBindings, status: str) -> None:
-    update_option_property(page_id, bindings.status, bindings.status.options_by_name[status])
+    update_option_property(
+        page_id, bindings.status, bindings.status.options_by_name[status]
+    )
 
 
 def set_error_log(page_id: str, bindings: SchemaBindings, value: str) -> None:
     update_text_property(page_id, bindings.error_log, value)
 
 
-def block_task(page_id: str, bindings: SchemaBindings, failure_code: str, message: str) -> None:
+def block_task(
+    page_id: str, bindings: SchemaBindings, failure_code: str, message: str
+) -> None:
     set_status(page_id, bindings, STATUS_BLOCKED)
     set_error_log(page_id, bindings, f"{failure_code}: {message}")
 
@@ -429,7 +480,10 @@ def get_property_value(page: dict[str, Any], binding: PropertyBinding) -> str:
     prop = properties.get(binding.name)
     if not isinstance(prop, dict):
         for candidate in properties.values():
-            if isinstance(candidate, dict) and candidate.get("id") == binding.property_id:
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("id") == binding.property_id
+            ):
                 prop = candidate
                 break
     if not isinstance(prop, dict):
@@ -447,7 +501,9 @@ def get_property_value(page: dict[str, Any], binding: PropertyBinding) -> str:
             return rich_text_plain_text(value.get("rich_text"))
     if isinstance(value, list):
         if prop_type == "multi_select":
-            return ", ".join(item.get("name", "") for item in value if isinstance(item, dict))
+            return ", ".join(
+                item.get("name", "") for item in value if isinstance(item, dict)
+            )
         return rich_text_plain_text(value)
     if isinstance(value, str):
         return value
@@ -466,13 +522,18 @@ def extract_page_title(page: dict[str, Any]) -> str:
     return "untitled"
 
 
-def select_todo_page(pages_payload: dict[str, Any], bindings: SchemaBindings) -> dict[str, Any] | None:
+def select_todo_page(
+    pages_payload: dict[str, Any], bindings: SchemaBindings
+) -> dict[str, Any] | None:
     data = pages_payload.get("data", {})
     results = data.get("results", []) if isinstance(data, dict) else []
     if not isinstance(results, list):
         raise AutoCoderError("insufficient_spec", "Notion page list is not readable")
     for page in results:
-        if isinstance(page, dict) and get_property_value(page, bindings.status) == STATUS_TO_DO:
+        if (
+            isinstance(page, dict)
+            and get_property_value(page, bindings.status) == STATUS_TO_DO
+        ):
             return page
     return None
 
@@ -520,7 +581,9 @@ def flatten_blocks(blocks: list[dict[str, Any]]) -> list[tuple[str, str]]:
             flattened.append((block_type, text))
         children = block.get("children")
         if isinstance(children, list):
-            flattened.extend(flatten_blocks([child for child in children if isinstance(child, dict)]))
+            flattened.extend(
+                flatten_blocks([child for child in children if isinstance(child, dict)])
+            )
     return flattened
 
 
@@ -528,7 +591,9 @@ def extract_task_sections(page_content_payload: dict[str, Any]) -> TaskSections:
     data = page_content_payload.get("data", {})
     blocks = data.get("blocks", []) if isinstance(data, dict) else []
     if not isinstance(blocks, list):
-        raise AutoCoderError("insufficient_spec", "Page content blocks are not readable")
+        raise AutoCoderError(
+            "insufficient_spec", "Page content blocks are not readable"
+        )
 
     current: str | None = None
     sections: dict[str, list[str]] = {
@@ -539,9 +604,14 @@ def extract_task_sections(page_content_payload: dict[str, Any]) -> TaskSections:
     body_lines: list[str] = []
     heading_names = set(sections)
 
-    for block_type, text in flatten_blocks([block for block in blocks if isinstance(block, dict)]):
+    for block_type, text in flatten_blocks(
+        [block for block in blocks if isinstance(block, dict)]
+    ):
         clean_text = text.strip()
-        if block_type in {"heading_1", "heading_2", "heading_3"} and clean_text in heading_names:
+        if (
+            block_type in {"heading_1", "heading_2", "heading_3"}
+            and clean_text in heading_names
+        ):
             current = clean_text
             body_lines.append(f"# {clean_text}")
             continue
@@ -580,7 +650,9 @@ def resolve_repo(apps_root: Path, project: str) -> Path:
     try:
         repo.relative_to(apps_root.resolve())
     except ValueError as exc:
-        raise AutoCoderError("unknown_project", f"Project escapes APPS_ROOT: {project}") from exc
+        raise AutoCoderError(
+            "unknown_project", f"Project escapes APPS_ROOT: {project}"
+        ) from exc
     return repo
 
 
@@ -614,23 +686,34 @@ def build_diff_payload(diff_text: str, max_chars: int) -> str:
         selected.append(chunk)
         total += len(chunk) + 1
     if selected:
-        return "\n".join(selected) + "\n\n...[truncated: some files omitted due to context budget]\n"
+        return (
+            "\n".join(selected)
+            + "\n\n...[truncated: some files omitted due to context budget]\n"
+        )
 
     per_file_budget = max(512, max_chars // max(1, len(chunks)))
     clipped: list[str] = []
     total = 0
     for chunk in chunks:
-        piece = chunk if len(chunk) <= per_file_budget else chunk[: per_file_budget - 32] + "\n...[truncated]\n"
+        piece = (
+            chunk
+            if len(chunk) <= per_file_budget
+            else chunk[: per_file_budget - 32] + "\n...[truncated]\n"
+        )
         if total + len(piece) + 1 > max_chars:
             break
         clipped.append(piece)
         total += len(piece) + 1
     if clipped:
-        return "\n".join(clipped) + "\n\n...[truncated per-file due to context budget]\n"
+        return (
+            "\n".join(clipped) + "\n\n...[truncated per-file due to context budget]\n"
+        )
     return ""
 
 
-def build_commit_prompt(task_id: str, title: str, files: str, diff_stat: str, diff_payload: str) -> str:
+def build_commit_prompt(
+    task_id: str, title: str, files: str, diff_stat: str, diff_payload: str
+) -> str:
     return (
         "You are writing a git commit message.\n"
         "Return ONLY the commit message text, no markdown, no code fences, no preamble.\n\n"
@@ -700,7 +783,9 @@ def infer_commit_type(title: str) -> str:
     return "feat"
 
 
-def build_fallback_commit_message(task_id: str, title: str, files: str, diff_stat: str) -> str:
+def build_fallback_commit_message(
+    task_id: str, title: str, files: str, diff_stat: str
+) -> str:
     commit_type = infer_commit_type(title)
     subject = f"{commit_type}: {title.strip() or 'update implementation'}"
     if len(subject) > 72:
@@ -720,7 +805,9 @@ def build_fallback_commit_message(task_id: str, title: str, files: str, diff_sta
     return "\n".join([subject, "", *body]).strip()
 
 
-def generate_commit_message_with_openrouter(repo: Path, config: Config, task_id: str, title: str) -> str:
+def generate_commit_message_with_openrouter(
+    repo: Path, config: Config, task_id: str, title: str
+) -> str:
     files = git(repo, "diff", "--cached", "--name-only").stdout.strip()
     diff_stat = git(repo, "diff", "--cached", "--stat").stdout.strip()
     full_diff = git(repo, "diff", "--cached").stdout
@@ -738,7 +825,10 @@ def generate_commit_message_with_openrouter(repo: Path, config: Config, task_id:
         "model": config.commit_model,
         "temperature": 0.2,
         "messages": [
-            {"role": "system", "content": "You produce high-quality git commit messages."},
+            {
+                "role": "system",
+                "content": "You produce high-quality git commit messages.",
+            },
             {"role": "user", "content": prompt},
         ],
     }
@@ -771,14 +861,21 @@ def validate_repo(repo: Path) -> None:
         raise AutoCoderError("missing_repo", f"Repository does not exist: {repo}")
     if git(repo, "rev-parse", "--is-inside-work-tree", check=False).returncode != 0:
         raise AutoCoderError("missing_repo", f"Not a git repository: {repo}")
-    if git(repo, "show-ref", "--verify", "--quiet", "refs/heads/main", check=False).returncode != 0:
+    if (
+        git(
+            repo, "show-ref", "--verify", "--quiet", "refs/heads/main", check=False
+        ).returncode
+        != 0
+    ):
         raise AutoCoderError("missing_repo", "Repository has no local main branch")
     status = git(repo, "status", "--porcelain").stdout.strip()
     if status:
         raise AutoCoderError("missing_repo", "Repository worktree is not clean")
     conflicts = git(repo, "diff", "--name-only", "--diff-filter=U").stdout.strip()
     if conflicts:
-        raise AutoCoderError("missing_repo", "Repository has unresolved merge conflicts")
+        raise AutoCoderError(
+            "missing_repo", "Repository has unresolved merge conflicts"
+        )
 
 
 def build_codex_prompt(
@@ -832,7 +929,11 @@ def codex_report_is_usable(stdout: str, stderr: str) -> bool:
     combined = f"{stdout}\n{stderr}".lower()
     if not combined.strip():
         return False
-    if "verification" not in combined and "test" not in combined and "check" not in combined:
+    if (
+        "verification" not in combined
+        and "test" not in combined
+        and "check" not in combined
+    ):
         return False
     failure_markers = [
         "verification failed",
@@ -854,9 +955,13 @@ def run_codex(repo: Path, config: Config, prompt: str) -> None:
         stream=True,
     )
     if result.returncode != 0:
-        raise AutoCoderError("codex_failure", result.stderr or result.stdout or "Codex failed")
+        raise AutoCoderError(
+            "codex_failure", result.stderr or result.stdout or "Codex failed"
+        )
     if not codex_report_is_usable(result.stdout, result.stderr):
-        raise AutoCoderError("codex_failure", "Codex output did not include usable verification evidence")
+        raise AutoCoderError(
+            "codex_failure", "Codex output did not include usable verification evidence"
+        )
 
 
 def prepare_git_branch(repo: Path, task_id: str, title: str) -> str:
@@ -870,13 +975,19 @@ def prepare_git_branch(repo: Path, task_id: str, title: str) -> str:
         raise AutoCoderError("merge_failure", str(exc)) from exc
 
 
-def complete_git_workflow(repo: Path, config: Config, task_id: str, title: str, branch: str) -> None:
+def complete_git_workflow(
+    repo: Path, config: Config, task_id: str, title: str, branch: str
+) -> None:
     try:
         status = git(repo, "status", "--porcelain").stdout.strip()
         if not status:
-            raise AutoCoderError("codex_failure", "Codex completed without producing repository changes")
+            raise AutoCoderError(
+                "codex_failure", "Codex completed without producing repository changes"
+            )
         git(repo, "add", "-A")
-        commit_message = generate_commit_message_with_openrouter(repo, config, task_id, title)
+        commit_message = generate_commit_message_with_openrouter(
+            repo, config, task_id, title
+        )
         git(repo, "commit", "-m", commit_message)
         git(repo, "checkout", "main")
         git(repo, "merge", "--no-ff", branch, "-m", f"Merge {branch}")
@@ -894,7 +1005,11 @@ def get_page_id(page: dict[str, Any]) -> str:
 
 def run_once(config: Config) -> int:
     if not config.notion_database_id:
-        emit_error("run_failed", failure_code="notion_update_failure", message="NOTION_TASK_DATABASE_ID is required")
+        emit_error(
+            "run_failed",
+            failure_code="notion_update_failure",
+            message="NOTION_TASK_DATABASE_ID is required",
+        )
         return 1
     if config.git_completion_mode != "auto_merge_main":
         emit_error(
@@ -909,12 +1024,16 @@ def run_once(config: Config) -> int:
     run_json_command(notion_command("status"))
     emit_debug("progress", stage="notion_load_database_properties")
     properties = run_json_command(
-        notion_command("get-database-properties", "--database-id", config.notion_database_id)
+        notion_command(
+            "get-database-properties", "--database-id", config.notion_database_id
+        )
     )
     emit_debug("progress", stage="notion_bind_schema")
     bindings = discover_schema(properties, config)
     emit_debug("progress", stage="notion_list_pages")
-    pages = run_json_command(notion_command("list-pages", "--database-id", config.notion_database_id))
+    pages = run_json_command(
+        notion_command("list-pages", "--database-id", config.notion_database_id)
+    )
     page = select_todo_page(pages, bindings)
     if page is None:
         emit("run_completed", result="no_task")
@@ -930,7 +1049,9 @@ def run_once(config: Config) -> int:
         set_error_log(page_id, bindings, "")
         emit("task_claimed", task_id=page_id)
         emit_debug("progress", stage="task_load_content", task_id=page_id)
-        page_content = run_json_command(notion_command("get-page-content", "--page-id", page_id))
+        page_content = run_json_command(
+            notion_command("get-page-content", "--page-id", page_id)
+        )
         emit_debug("progress", stage="task_extract_sections", task_id=page_id)
         sections = extract_task_sections(page_content)
         emit_debug("progress", stage="repo_resolve", task_id=page_id, project=project)
@@ -941,10 +1062,18 @@ def run_once(config: Config) -> int:
         branch = prepare_git_branch(repo, page_id, title)
         emit_debug("progress", stage="codex_build_prompt", task_id=page_id)
         prompt = build_codex_prompt(repo, page_id, title, sections)
-        emit_debug("progress", stage="codex_execute", task_id=page_id, branch=branch, model=config.codex_model)
+        emit_debug(
+            "progress",
+            stage="codex_execute",
+            task_id=page_id,
+            branch=branch,
+            model=config.codex_model,
+        )
         run_codex(repo, config, prompt)
         emit("codex_finished", task_id=page_id, success=True)
-        emit_debug("progress", stage="git_complete_workflow", task_id=page_id, branch=branch)
+        emit_debug(
+            "progress", stage="git_complete_workflow", task_id=page_id, branch=branch
+        )
         complete_git_workflow(repo, config, page_id, title, branch)
         emit_debug("progress", stage="notion_mark_done", task_id=page_id)
         set_status(page_id, bindings, STATUS_DONE)
@@ -952,11 +1081,23 @@ def run_once(config: Config) -> int:
         emit("run_completed", result="done", task_id=page_id)
         return 0
     except AutoCoderError as exc:
-        emit_warn("progress", stage="task_mark_blocked", task_id=page_id, failure_code=exc.failure_code)
-        emit_warn("task_blocked", task_id=page_id, failure_code=exc.failure_code, message=exc.message)
+        emit_warn(
+            "progress",
+            stage="task_mark_blocked",
+            task_id=page_id,
+            failure_code=exc.failure_code,
+        )
+        emit_warn(
+            "task_blocked",
+            task_id=page_id,
+            failure_code=exc.failure_code,
+            message=exc.message,
+        )
         try:
             block_task(page_id, bindings, exc.failure_code, exc.message)
-        except Exception as block_exc:  # noqa: BLE001 - final reconciliation should be visible.
+        except (
+            Exception
+        ) as block_exc:  # noqa: BLE001 - final reconciliation should be visible.
             emit_error(
                 "run_failed",
                 task_id=page_id,
@@ -964,9 +1105,16 @@ def run_once(config: Config) -> int:
                 message=str(block_exc),
             )
             return 1
-        emit("run_completed", result="blocked", task_id=page_id, failure_code=exc.failure_code)
+        emit(
+            "run_completed",
+            result="blocked",
+            task_id=page_id,
+            failure_code=exc.failure_code,
+        )
         return 1
-    except Exception as exc:  # noqa: BLE001 - ensure uncaught errors are surfaced as structured output.
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - ensure uncaught errors are surfaced as structured output.
         emit_error(
             "run_failed",
             task_id=page_id,
@@ -1009,7 +1157,9 @@ def status() -> None:
 
 @app.command("install-cron")
 def install_cron(
-    schedule: str = typer.Option("*/15 * * * *", help="Cron schedule expression to print."),
+    schedule: str = typer.Option(
+        "*/15 * * * *", help="Cron schedule expression to print."
+    ),
 ) -> None:
     """Print a crontab entry for this service without installing it."""
     command = f"cd {ROOT} && {AUTO_CODER_BIN} run"

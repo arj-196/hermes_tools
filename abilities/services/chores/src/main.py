@@ -15,7 +15,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import typer
 from loguru import logger
 
-app = typer.Typer(help="Cron-driven operational chore runner for Robin.", no_args_is_help=True)
+app = typer.Typer(
+    help="Cron-driven operational chore runner for Robin.", no_args_is_help=True
+)
 
 ROOT = Path(__file__).resolve().parents[4]
 CHORES_BIN = ROOT / "bin" / "chores"
@@ -66,7 +68,12 @@ def emit_debug(event: str, **fields: Any) -> None:
 
 
 def format_time_utc() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def format_value(value: Any) -> str:
@@ -84,7 +91,9 @@ def format_message(fields: dict[str, Any]) -> str:
 
 
 def configure_logger() -> None:
-    configured = LEVEL_MAP.get(os.getenv("ROBIN_LOG_LEVEL", "info").strip().lower(), "INFO")
+    configured = LEVEL_MAP.get(
+        os.getenv("ROBIN_LOG_LEVEL", "info").strip().lower(), "INFO"
+    )
     logger.remove()
     logger.add(
         sys.stdout,
@@ -119,9 +128,15 @@ def expand_path(value: str) -> Path:
 
 def load_config() -> Config:
     return Config(
-        timezone_name=os.getenv("CHORES_TIMEZONE", DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE,
-        state_file=expand_path(os.getenv("CHORES_STATE_FILE", DEFAULT_STATE_FILE).strip() or DEFAULT_STATE_FILE),
-        codex_init_command=os.getenv("CHORES_CODEX_INIT_COMMAND", DEFAULT_CODEX_INIT_COMMAND).strip()
+        timezone_name=os.getenv("CHORES_TIMEZONE", DEFAULT_TIMEZONE).strip()
+        or DEFAULT_TIMEZONE,
+        state_file=expand_path(
+            os.getenv("CHORES_STATE_FILE", DEFAULT_STATE_FILE).strip()
+            or DEFAULT_STATE_FILE
+        ),
+        codex_init_command=os.getenv(
+            "CHORES_CODEX_INIT_COMMAND", DEFAULT_CODEX_INIT_COMMAND
+        ).strip()
         or DEFAULT_CODEX_INIT_COMMAND,
     )
 
@@ -156,7 +171,9 @@ def load_state(path: Path) -> dict[str, dict[str, str]]:
 
 def save_state(path: Path, state: dict[str, dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def now_in_timezone(timezone_name: str) -> datetime:
@@ -167,7 +184,9 @@ def now_in_timezone(timezone_name: str) -> datetime:
     return datetime.now(tz)
 
 
-def is_due(chore: Chore, chore_state: dict[str, str], now_local: datetime) -> tuple[bool, str]:
+def is_due(
+    chore: Chore, chore_state: dict[str, str], now_local: datetime
+) -> tuple[bool, str]:
     today = now_local.date().isoformat()
     if chore_state.get("last_success_date") == today:
         return (False, "already_succeeded_today")
@@ -179,7 +198,9 @@ def is_due(chore: Chore, chore_state: dict[str, str], now_local: datetime) -> tu
 def run_shell_command(command: str) -> subprocess.CompletedProcess[str]:
     parts = shlex.split(command)
     if not parts:
-        return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="Empty command")
+        return subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="Empty command"
+        )
     return subprocess.run(parts, text=True, capture_output=True, check=False)
 
 
@@ -223,7 +244,12 @@ def run_once(config: Config) -> int:
     now_local = now_in_timezone(config.timezone_name)
     state = load_state(config.state_file)
 
-    emit("run_started", timezone=config.timezone_name, now=now_local.isoformat(), total_chores=len(chores))
+    emit(
+        "run_started",
+        timezone=config.timezone_name,
+        now=now_local.isoformat(),
+        total_chores=len(chores),
+    )
 
     any_failed = False
     for chore in chores:
@@ -280,7 +306,9 @@ def status() -> None:
 
 @app.command("install-cron")
 def install_cron(
-    schedule: str = typer.Option("*/5 * * * *", help="Cron schedule expression to print."),
+    schedule: str = typer.Option(
+        "*/5 * * * *", help="Cron schedule expression to print."
+    ),
 ) -> None:
     """Print a crontab entry for this service without installing it."""
     command = f"cd {ROOT} && {CHORES_BIN} run"
