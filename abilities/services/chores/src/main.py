@@ -324,7 +324,7 @@ def status() -> None:
 @app.command("install-cron")
 def install_cron(
     schedule: str = typer.Option(
-        "*/5 * * * *", help="Cron schedule expression to print."
+        "*/5 8-10 * * *", help="Cron schedule expression to print."
     ),
 ) -> None:
     """Print a crontab entry for this service without installing it."""
