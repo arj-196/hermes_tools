@@ -11,6 +11,7 @@ usage() {
 Usage: ./bin/history-dashboard <mode>
 
 Modes:
+  build     Build the Docker image
   status    Print health payload JSON
   serve     Start production Next.js dashboard in Docker
   help      Show this help
@@ -82,11 +83,20 @@ run_docker() {
     help|--help|-h)
       usage
       ;;
-    status|serve)
+    build|status|serve)
       load_env
 
       local image="robin-history-dashboard"
       local dockerfile="$ROOT/abilities/apps/history-dashboard/Dockerfile"
+
+      if [[ "$mode" == "build" ]]; then
+        exec docker build \
+          -t "$image" \
+          -f "$dockerfile" \
+          "$ROOT" \
+          "$@"
+      fi
+
       local port="${HISTORY_DASHBOARD_PORT:-3000}"
       local robin_home="${ROBIN_HOME:-.robin}"
       local host_robin_home
@@ -98,6 +108,7 @@ run_docker() {
       local docker_args=(
         run
         --rm
+        --init
       )
       if [[ "$mode" == "serve" ]]; then
         docker_args+=(--publish "$port:$port")
@@ -120,7 +131,7 @@ run_docker() {
 
       exec docker "${docker_args[@]}" \
         "$image" \
-        npm run start -- --hostname 0.0.0.0 --port "$port" "$@"
+        ./node_modules/.bin/next start --hostname 0.0.0.0 --port "$port" "$@"
       ;;
     *)
       echo "Unknown mode: $mode" >&2
