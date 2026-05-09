@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getAllRunHistory } from "@/lib/observability";
+import { getAllRunHistory } from "../../../lib/observability";
 
 const DEFAULT_HISTORY_LIMIT = 500;
 
