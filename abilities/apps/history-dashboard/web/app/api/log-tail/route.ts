@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { readLogTailFast } from "../../../lib/observability";
+import { readLogTailFast } from "../../../server/observability";
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const logPath = request.nextUrl.searchParams.get("logPath") ?? "";
