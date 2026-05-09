@@ -57,25 +57,24 @@ class AutoCoderTests(unittest.TestCase):
         self.assertIn("out line", result.stdout)
         self.assertIn("err line", result.stderr)
         logged_events = [call.args for call in log_event_mock.call_args_list]
-        self.assertIn(("INFO", "codex_stream"), [args[:2] for args in logged_events])
-        self.assertIn(("WARNING", "codex_stream"), [args[:2] for args in logged_events])
+        self.assertEqual(
+            [("DEBUG", "codex_stream"), ("DEBUG", "codex_stream")],
+            [args[:2] for args in logged_events],
+        )
 
-    def test_install_cron_uses_env_wrapper(self) -> None:
+    def test_install_cron_uses_dockerized_bin(self) -> None:
         result = CliRunner().invoke(main.app, ["install-cron"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("*/15 * * * *", result.output)
         self.assertIn(f"cd {main.ROOT} &&", result.output)
-        self.assertIn(
-            f"{main.RUN_WITH_ENV_BIN} {main.AUTO_CODER_BIN} run", result.output
-        )
+        self.assertIn(f"{main.AUTO_CODER_BIN} run", result.output)
+        self.assertNotIn("--drain", result.output)
 
     def test_install_cron_drain_flag_appends_drain(self) -> None:
         result = CliRunner().invoke(main.app, ["install-cron", "--drain"])
         self.assertEqual(result.exit_code, 0)
-        self.assertIn(
-            f"{main.RUN_WITH_ENV_BIN} {main.AUTO_CODER_BIN} run --drain",
-            result.output,
-        )
+        self.assertIn(f"{main.AUTO_CODER_BIN} run --drain", result.output)
+        self.assertEqual(result.output.count("--drain"), 1)
 
     def test_resolve_run_lock_path_uses_robin_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.dict(

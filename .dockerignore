@@ -1,0 +1,6 @@
+.git
+.robin
+**/.next
+**/.venv
+**/__pycache__
+**/node_modules

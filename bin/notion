@@ -3,4 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+if [[ "${ROBIN_CONTAINER_DIRECT_PYTHON:-}" == "1" ]]; then
+  exec python abilities/connectors/notion/src/main.py "$@"
+fi
+
 uv run --project abilities/connectors/notion python abilities/connectors/notion/src/main.py "$@"

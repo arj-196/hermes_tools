@@ -1,6 +1,8 @@
 # History Dashboard Ability
 
 This ability exposes the Robin history dashboard as a Next.js app.
+The checked-in `./bin/history-dashboard` shim runs the production app in Docker
+by default.
 
 ## Commands
 
@@ -25,8 +27,9 @@ ROBIN_LOG_RUNS_DIR=logs
 ## Notes
 
 - `status` prints a lightweight health payload.
-- `serve` starts a local Next.js web app from `abilities/apps/history-dashboard/web`.
-- Install frontend dependencies first: `cd abilities/apps/history-dashboard/web && npm install`.
+- `serve` starts the production Next.js server in a foreground Docker container.
+- The first Dockerized run builds the `robin-history-dashboard` image if it is missing.
+- `ROBIN_HOME` is mounted read-only at `/robin-home` inside the container.
 - The dashboard is read-only and shows cross-service run history plus run logs.
 - If `HISTORY_DASHBOARD_AUTH_USERNAME` and `HISTORY_DASHBOARD_AUTH_PASSWORD` are both set, the app requires HTTP Basic Auth.
 - If either auth variable is empty or unset, auth is disabled (open access fallback).

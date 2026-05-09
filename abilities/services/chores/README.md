@@ -1,6 +1,7 @@
 # Chores Service
 
 The chores service is a single-run worker intended to be called by cron.
+The checked-in `./bin/chores` shim runs it in Docker by default.
 Each run evaluates registered chores, executes due chores, and persists
 attempt/success state for daily dedupe and retries.
 
@@ -12,6 +13,10 @@ attempt/success state for daily dedupe and retries.
 ./bin/chores run
 ./bin/chores install-cron
 ```
+
+- The first Dockerized run builds the `robin-chores` image if it is missing.
+- `ROBIN_HOME` is mounted read-write at `/robin-home` inside the container.
+- Host `~/.codex` is mounted read-write for Codex CLI authentication and state.
 
 ## Configuration
 

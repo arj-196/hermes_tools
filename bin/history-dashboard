@@ -2,54 +2,131 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WEB_DIR="$ROOT/abilities/apps/history-dashboard/web"
+ENV_FILE="$ROOT/.env"
+CANONICAL_REPO="/workspace"
+CANONICAL_ROBIN_HOME="/robin-home"
 
-if [[ ! -d "$WEB_DIR" ]]; then
-  echo "history-dashboard web app not found: $WEB_DIR" >&2
-  exit 1
-fi
-
-ensure_next_available() {
-  if [[ -x "$WEB_DIR/node_modules/.bin/next" ]]; then
-    return
-  fi
-
-  echo "Installing history-dashboard web dependencies..." >&2
-  (cd "$WEB_DIR" && npm install)
-}
-
-MODE="${1:-help}"
-case "$MODE" in
-  status)
-    PORT="${HISTORY_DASHBOARD_PORT:-3000}"
-    cat <<JSON
-{
-  "ability": "history-dashboard",
-  "frontend": "nextjs",
-  "port": ${PORT},
-  "status": "ready"
-}
-JSON
-    ;;
-  serve)
-    shift || true
-    PORT="${HISTORY_DASHBOARD_PORT:-3000}"
-    ensure_next_available
-    cd "$WEB_DIR"
-    exec npm run dev -- --port "$PORT" "$@"
-    ;;
-  help|--help|-h)
-    cat <<'TEXT'
+usage() {
+  cat <<'TEXT'
 Usage: ./bin/history-dashboard <mode>
 
 Modes:
   status    Print health payload JSON
-  serve     Start Next.js dashboard
+  serve     Start production Next.js dashboard in Docker
   help      Show this help
 TEXT
-    ;;
-  *)
-    echo "Unknown mode: $MODE" >&2
+}
+
+require_env_file() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "Missing .env file at $ENV_FILE" >&2
     exit 1
-    ;;
-esac
+  fi
+}
+
+load_env() {
+  require_env_file
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+}
+
+append_env_file_vars() {
+  local target_args="$1"
+  local line name value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+    [[ "$line" == export[[:space:]]* ]] && line="${line#export }"
+    name="${line%%=*}"
+    name="${name%"${name##*[![:space:]]}"}"
+    if [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      value="${!name-}"
+      eval "$target_args+=(--env \"\$name=\$value\")"
+    fi
+  done < "$ENV_FILE"
+}
+
+resolve_path() {
+  local value="$1"
+  python3 - "$value" <<'PY'
+import os
+import sys
+print(os.path.abspath(os.path.expandvars(os.path.expanduser(sys.argv[1]))))
+PY
+}
+
+docker_image_exists() {
+  docker image inspect "$1" >/dev/null 2>&1
+}
+
+ensure_image() {
+  local image="$1"
+  local dockerfile="$2"
+  if docker_image_exists "$image"; then
+    return
+  fi
+
+  docker build \
+    -t "$image" \
+    -f "$dockerfile" \
+    "$ROOT"
+}
+
+run_docker() {
+  local mode="${1:-help}"
+  shift || true
+
+  case "$mode" in
+    help|--help|-h)
+      usage
+      ;;
+    status|serve)
+      load_env
+
+      local image="robin-history-dashboard"
+      local dockerfile="$ROOT/abilities/apps/history-dashboard/Dockerfile"
+      local port="${HISTORY_DASHBOARD_PORT:-3000}"
+      local robin_home="${ROBIN_HOME:-.robin}"
+      local host_robin_home
+      host_robin_home="$(resolve_path "$robin_home")"
+      mkdir -p "$host_robin_home"
+
+      ensure_image "$image" "$dockerfile"
+
+      local docker_args=(
+        run
+        --rm
+      )
+      if [[ "$mode" == "serve" ]]; then
+        docker_args+=(--publish "$port:$port")
+      fi
+      docker_args+=(
+        --volume "$host_robin_home:$CANONICAL_ROBIN_HOME:ro"
+        --workdir "$CANONICAL_REPO/abilities/apps/history-dashboard/web"
+      )
+      append_env_file_vars docker_args
+      docker_args+=(
+        --env "ROBIN_HOME=$CANONICAL_ROBIN_HOME"
+        --env "PORT=$port"
+      )
+
+      if [[ "$mode" == "status" ]]; then
+        exec docker "${docker_args[@]}" \
+          "$image" \
+          node /usr/local/bin/history-dashboard-status.js
+      fi
+
+      exec docker "${docker_args[@]}" \
+        "$image" \
+        npm run start -- --hostname 0.0.0.0 --port "$port" "$@"
+      ;;
+    *)
+      echo "Unknown mode: $mode" >&2
+      exit 1
+      ;;
+  esac
+}
+
+run_docker "$@"

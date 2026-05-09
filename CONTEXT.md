@@ -59,6 +59,12 @@ associated run logs from local observability artifacts.
 The lightweight machine-readable metadata for a single ability. It defines basic
 identity and execution hints, not a strict lifecycle contract.
 
+### Execution engine
+
+The runtime mechanism an ability wrapper uses to execute an ability. Robin uses
+Docker as the default execution engine so apps and services run consistently
+across development machines and servers.
+
 ### Database page
 
 The canonical term for a record in a Notion database. Historical references to

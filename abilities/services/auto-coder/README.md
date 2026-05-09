@@ -1,6 +1,7 @@
 # Auto-coder Service
 
 The auto-coder service is a single-run worker intended to be called by cron.
+The checked-in `./bin/auto-coder` shim runs it in Docker by default.
 Each run claims at most one Notion task, delegates repository edits to Codex,
 and completes the git workflow when Codex reports successful verification.
 For local long-running usage, watch mode can continuously poll and process tasks
@@ -24,6 +25,10 @@ one after another.
 - `./bin/auto-coder run --watch` keeps running, polling for new Todo tasks.
 - Watch mode sleeps only when no task is available, and continues after blocked/failed tasks.
 - Only one auto-coder instance can run at a time; overlapping runs exit immediately.
+- The first Dockerized run builds the `robin-auto-coder` image if it is missing.
+- `ROBIN_HOME` is mounted read-write at `/robin-home` inside the container.
+- `AUTO_CODER_APPS_ROOT` is mounted read-write at `/apps` inside the container.
+- Host `~/.codex` is mounted read-write for Codex CLI authentication and state.
 
 ## Required Environment
 

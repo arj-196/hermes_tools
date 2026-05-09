@@ -49,6 +49,11 @@ Use the checked-in shims directly:
 ./bin/history-dashboard serve
 ```
 
+These app and service shims use Docker by default. The first run builds the
+ability image if it is missing, then runs the command in a container. Cron on
+Ubuntu should call the same checked-in shims; cron remains the scheduler while
+Docker is the execution engine.
+
 If you add `bin/` to your `PATH`, the same commands can be run as:
 
 ```bash
@@ -89,16 +94,14 @@ Local development uses a single root `.env` file for convenience.
 cp .env.example .env
 ```
 
-Cron runs with a minimal environment and may not include user-level install
-paths. If cron cannot find tools like `uv`, set `PATH` in `.env` to the same
-value you use interactively. `bin/run-with-env` treats `.env` values as
-authoritative, including `PATH`.
+Each Dockerized ability wrapper loads the root `.env` file directly. Host paths
+such as `ROBIN_HOME` and `AUTO_CODER_APPS_ROOT` are resolved on the host by the
+owning wrapper and mounted to stable container paths. Inside containers,
+`ROBIN_HOME` is `/robin-home` and `AUTO_CODER_APPS_ROOT` is `/apps`.
 
-Example:
-
-```bash
-PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-```
+The host must have Docker installed, and the cron user must be allowed to run
+`docker`. Service containers mount host `~/.codex` so the Codex CLI can use the
+same authentication state as the host.
 
 Cron-invoked services also support shared observability settings:
 
