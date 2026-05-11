@@ -1,22 +1,32 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactElement } from "react";
+import {
+  Bar,
+  BarChart,
+  Brush,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
-type RunRecord = {
-  event: string;
-  run_id: string;
-  service: string;
-  command: string;
-  started_at: string;
-  finished_at: string | null;
-  duration_ms: number | null;
-  result: string | null;
-  exit_code: number | null;
-  failure_code: string | null;
-  message: string | null;
-  log_path: string;
-  metadata: Record<string, string | number | boolean | null>;
-};
+import {
+  buildTimelineData,
+  DEFAULT_HISTORY_LOOKBACK_DAYS,
+  deriveTimelineRangeFromIndexes,
+  filterRecordsByTimelineRange,
+  getServiceColor,
+  isFullTimelineRange,
+  MAX_HISTORY_LOOKBACK_DAYS,
+  MIN_HISTORY_LOOKBACK_DAYS,
+  normalizeLookbackInput,
+  type RunRecord,
+  type TimelineDatum,
+  type TimelineRange,
+} from "./history-timeline";
 
 type LogTailResponse = {
   tail?: string;
@@ -30,6 +40,15 @@ type DetailItem = {
 };
 
 const ALL_FILTER_VALUE = "__all__";
+
+type HistoryResponse = {
+  records: RunRecord[];
+};
+
+type BrushRange = {
+  startIndex: number;
+  endIndex: number;
+};
 
 function formatDateTime(value: string | null): string {
   if (!value) {
@@ -66,6 +85,21 @@ function formatDuration(durationMs: number | null): string {
   return `${minutes}m ${seconds}s`;
 }
 
+function formatCompactDuration(durationMs: number): string {
+  if (durationMs < 1_000) {
+    return `${durationMs}ms`;
+  }
+
+  const totalSeconds = durationMs / 1_000;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(totalSeconds >= 10 ? 0 : 1)}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds % 60);
+  return `${minutes}m ${seconds}s`;
+}
+
 function formatLabel(value: string): string {
   return value
     .replace(/_/g, " ")
@@ -80,6 +114,19 @@ function formatValue(value: string | number | boolean | null | undefined): strin
     return value ? "true" : "false";
   }
   return String(value);
+}
+
+function formatTimelineRange(range: TimelineRange | null): string {
+  if (!range) {
+    return "";
+  }
+
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+
+  return `${formatter.format(new Date(range.startMs))} - ${formatter.format(new Date(range.endMs))}`;
 }
 
 function buildSummaryItems(record: RunRecord): string[] {
@@ -118,8 +165,29 @@ function buildDetailItems(record: RunRecord): DetailItem[] {
   ];
 }
 
+function TimelineTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: TimelineDatum }> }) {
+  const datum = payload?.[0]?.payload;
+  if (!active || !datum) {
+    return null;
+  }
+
+  return (
+    <div className="timeline-tooltip">
+      <strong>{datum.service}</strong>
+      <span>{formatDateTime(datum.startedAt)}</span>
+      <span>{formatCompactDuration(datum.durationMs)}</span>
+      <span>{datum.runId}</span>
+      <span>{datum.result || "pending"}</span>
+    </div>
+  );
+}
+
 export default function Home(): ReactElement {
   const [records, setRecords] = useState<RunRecord[]>([]);
+  const [lookbackDays, setLookbackDays] = useState(DEFAULT_HISTORY_LOOKBACK_DAYS);
+  const [lookbackInput, setLookbackInput] = useState(String(DEFAULT_HISTORY_LOOKBACK_DAYS));
+  const [activeTimelineRange, setActiveTimelineRange] = useState<TimelineRange | null>(null);
+  const [brushRange, setBrushRange] = useState<BrushRange | null>(null);
   const [selectedService, setSelectedService] = useState(ALL_FILTER_VALUE);
   const [selectedResult, setSelectedResult] = useState(ALL_FILTER_VALUE);
   const [runQuery, setRunQuery] = useState("");
@@ -133,13 +201,29 @@ export default function Home(): ReactElement {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    void fetch("/api/history")
+    setError("");
+    void fetch(`/api/history?lookbackDays=${lookbackDays}`)
       .then((response) => response.json())
-      .then((payload: { records: RunRecord[] }) => {
+      .then((payload: HistoryResponse) => {
         setRecords(payload.records || []);
+        setActiveTimelineRange(null);
       })
       .catch(() => setError("Failed to load run history."));
-  }, []);
+  }, [lookbackDays]);
+
+  const timelineData = useMemo(() => buildTimelineData(records), [records]);
+
+  useEffect(() => {
+    if (!timelineData.length) {
+      setBrushRange(null);
+      return;
+    }
+
+    setBrushRange({
+      startIndex: 0,
+      endIndex: timelineData.length - 1,
+    });
+  }, [timelineData]);
 
   const services = useMemo(
     () => [...new Set(records.map((record) => record.service).filter(Boolean))].sort(),
@@ -150,9 +234,14 @@ export default function Home(): ReactElement {
     [records],
   );
 
+  const timelineFilteredRecords = useMemo(
+    () => filterRecordsByTimelineRange(records, activeTimelineRange),
+    [activeTimelineRange, records],
+  );
+
   const filtered = useMemo(() => {
     const query = runQuery.trim().toLowerCase();
-    return records.filter((record) => {
+    return timelineFilteredRecords.filter((record) => {
       if (selectedService !== ALL_FILTER_VALUE && record.service !== selectedService) {
         return false;
       }
@@ -164,7 +253,7 @@ export default function Home(): ReactElement {
       }
       return true;
     });
-  }, [records, runQuery, selectedResult, selectedService]);
+  }, [runQuery, selectedResult, selectedService, timelineFilteredRecords]);
 
   useEffect(() => {
     if (!selectedRunId) {
@@ -214,6 +303,41 @@ export default function Home(): ReactElement {
       });
   }, [selected]);
 
+  const handleBrushChange = (next: { startIndex?: number; endIndex?: number } | null): void => {
+    if (!next || !timelineData.length) {
+      return;
+    }
+
+    const startIndex = next.startIndex ?? 0;
+    const endIndex = next.endIndex ?? timelineData.length - 1;
+    setBrushRange({ startIndex, endIndex });
+
+    if (isFullTimelineRange(timelineData, startIndex, endIndex)) {
+      setActiveTimelineRange(null);
+      return;
+    }
+
+    setActiveTimelineRange(deriveTimelineRangeFromIndexes(timelineData, startIndex, endIndex));
+  };
+
+  const resetTimelineRange = (): void => {
+    if (!timelineData.length) {
+      return;
+    }
+
+    setBrushRange({
+      startIndex: 0,
+      endIndex: timelineData.length - 1,
+    });
+    setActiveTimelineRange(null);
+  };
+
+  const commitLookbackInput = (): void => {
+    const normalized = normalizeLookbackInput(lookbackInput);
+    setLookbackInput(String(normalized));
+    setLookbackDays((current) => (current === normalized ? current : normalized));
+  };
+
   const handleLoadFullLog = (): void => {
     if (!selected || !isTruncated || isLoadingFullLog || isFullLogLoaded) {
       return;
@@ -255,6 +379,24 @@ export default function Home(): ReactElement {
         </div>
 
         <section className="filter-bar" aria-label="Run history filters">
+          <label className="filter-field filter-lookback">
+            <span>History lookback (days)</span>
+            <input
+              type="number"
+              min={MIN_HISTORY_LOOKBACK_DAYS}
+              max={MAX_HISTORY_LOOKBACK_DAYS}
+              inputMode="numeric"
+              value={lookbackInput}
+              onChange={(event) => setLookbackInput(event.target.value)}
+              onBlur={commitLookbackInput}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  commitLookbackInput();
+                }
+              }}
+            />
+          </label>
+
           <label className="filter-field">
             <span>Service</span>
             <select value={selectedService} onChange={(event) => setSelectedService(event.target.value)}>
@@ -291,6 +433,87 @@ export default function Home(): ReactElement {
       </header>
 
       {error ? <p className="banner-error">{error}</p> : null}
+
+      <section className="timeline-panel" aria-label="Run timeline">
+        <div className="timeline-panel-header">
+          <div>
+            <h2>Run Timeline</h2>
+            <p>Run start time on the X-axis and execution time on the Y-axis across the loaded history window.</p>
+          </div>
+          <div className="timeline-legend">
+            {services.map((service) => (
+              <span key={service} className="timeline-legend-item">
+                <span className="timeline-legend-swatch" style={{ backgroundColor: getServiceColor(service) }} />
+                {service}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="timeline-status-row">
+          <span className={`timeline-range-chip${activeTimelineRange ? " active" : ""}`}>
+            {activeTimelineRange ? `Selected range: ${formatTimelineRange(activeTimelineRange)}` : "Showing full loaded window"}
+          </span>
+          <button
+            type="button"
+            className="timeline-reset-button"
+            onClick={resetTimelineRange}
+            disabled={!activeTimelineRange}
+          >
+            Reset range
+          </button>
+        </div>
+
+        <div className="timeline-chart-shell">
+          {timelineData.length ? (
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart
+                data={timelineData}
+                margin={{ top: 8, right: 12, left: 0, bottom: 12 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(188, 199, 214, 0.5)" />
+                <XAxis dataKey="startedAtLabel" minTickGap={24} tickLine={false} axisLine={false} />
+                <YAxis
+                  width={48}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(value: number) => formatCompactDuration(value)}
+                />
+                <Tooltip content={<TimelineTooltip />} cursor={{ fill: "rgba(23, 92, 211, 0.08)" }} />
+                <Bar
+                  dataKey="durationMs"
+                  radius={[6, 6, 0, 0]}
+                  onClick={(data) => {
+                    const datum = data.payload as TimelineDatum | undefined;
+                    if (datum) {
+                      setSelectedRunId(datum.runId);
+                    }
+                  }}
+                >
+                  {timelineData.map((entry) => (
+                    <Cell key={entry.runId} fill={entry.color} />
+                  ))}
+                </Bar>
+                {brushRange ? (
+                  <Brush
+                    dataKey="startedAtLabel"
+                    height={24}
+                    startIndex={brushRange.startIndex}
+                    endIndex={brushRange.endIndex}
+                    travellerWidth={8}
+                    onChange={handleBrushChange}
+                  />
+                ) : null}
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="list-empty-state timeline-empty-state">
+              <h3>No runs in the loaded history window</h3>
+              <p>Increase the history lookback days if you want to load older run records.</p>
+            </div>
+          )}
+        </div>
+      </section>
 
       <section className="workspace">
         <aside className="run-list-pane">

@@ -26,6 +26,9 @@ const DEFAULT_ROBIN_HOME = ".robin";
 const DEFAULT_RUN_LEDGER_DIR = "run-ledger";
 const DEFAULT_LOG_RUNS_DIR = "logs";
 const RUN_LEDGER_FILENAME = "run-ledger.jsonl";
+export const DEFAULT_HISTORY_LOOKBACK_DAYS = 7;
+export const MIN_HISTORY_LOOKBACK_DAYS = 1;
+export const MAX_HISTORY_LOOKBACK_DAYS = 90;
 
 function repoRoot(): string {
   return path.resolve(process.cwd(), "../../../../");
@@ -93,16 +96,36 @@ function parseRecord(line: string): RunRecord | null {
   }
 }
 
-export function getAllRunHistory(limit: number): RunRecord[] {
+function recordTimestamp(record: RunRecord): number | null {
+  const primary = record.finished_at || record.started_at;
+  const value = Date.parse(primary);
+  return Number.isFinite(value) ? value : null;
+}
+
+export function normalizeLookbackDays(value: string | null | undefined): number {
+  const parsed = Number.parseInt((value ?? "").trim(), 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_HISTORY_LOOKBACK_DAYS;
+  }
+  return Math.min(MAX_HISTORY_LOOKBACK_DAYS, Math.max(MIN_HISTORY_LOOKBACK_DAYS, parsed));
+}
+
+export function getAllRunHistory(limit: number, lookbackDays = DEFAULT_HISTORY_LOOKBACK_DAYS): RunRecord[] {
   const file = ledgerPath();
   if (!fs.existsSync(file)) {
     return [];
   }
 
+  const safeLookbackDays = Math.min(MAX_HISTORY_LOOKBACK_DAYS, Math.max(MIN_HISTORY_LOOKBACK_DAYS, lookbackDays));
+  const cutoff = Date.now() - safeLookbackDays * 24 * 60 * 60 * 1000;
   const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter((line) => line.trim() !== "");
   const records = lines
     .map(parseRecord)
-    .filter((record): record is RunRecord => record !== null && record.event === "run_finished");
+    .filter((record): record is RunRecord => record !== null && record.event === "run_finished")
+    .filter((record) => {
+      const timestamp = recordTimestamp(record);
+      return timestamp !== null && timestamp >= cutoff;
+    });
 
   records.sort((a, b) => {
     const left = a.finished_at || a.started_at;
